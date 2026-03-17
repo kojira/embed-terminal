@@ -26,6 +26,9 @@ function createPty(command, options = {}) {
   if (options.resume && command === 'claude') {
     args.push('--resume');
   }
+  if (options.appendSystemPrompt && command === 'claude') {
+    args.push('--append-system-prompt', options.appendSystemPrompt);
+  }
 
   return serverDeps.spawnPty(command, args, {
     name: 'xterm-256color',
@@ -112,6 +115,7 @@ function createChatServer(httpServer, options = {}) {
     try {
       term = createPty(command, {
         resume: sessionOptions.resume,
+        appendSystemPrompt: sessionOptions.appendSystemPrompt,
         cwd: options.cwd,
         env: options.env,
       });
@@ -199,16 +203,30 @@ function createChatServer(httpServer, options = {}) {
       const isExpired = Boolean(sessionId);
       sessionId = crypto.randomUUID();
 
-      const result = createSession(sessionId, { resume: isExpired });
-      if (result.error) {
-        sendText(`\r\n${result.error}\r\n`);
-        ws.close();
+      const startSession = (appendSystemPrompt) => {
+        const result = createSession(sessionId, { resume: isExpired, appendSystemPrompt });
+        if (result.error) {
+          sendText(`\r\n${result.error}\r\n`);
+          ws.close();
+          return;
+        }
+
+        session = result.session;
+        session.ws = ws;
+        sendText(JSON.stringify({ type: 'session', sessionId, resumed: isExpired }));
+      };
+
+      if (options.getSystemPrompt) {
+        Promise.resolve(options.getSystemPrompt(url.searchParams))
+          .then((prompt) => startSession(prompt || undefined))
+          .catch((err) => {
+            console.error('getSystemPrompt failed:', err);
+            startSession(undefined);
+          });
         return;
       }
 
-      session = result.session;
-      session.ws = ws;
-      sendText(JSON.stringify({ type: 'session', sessionId, resumed: isExpired }));
+      startSession(undefined);
     }
 
     ws.on('message', (message) => {
