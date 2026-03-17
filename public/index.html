@@ -360,6 +360,24 @@
       let reconnectAttempts = 0;
       let reconnectTimer = null;
       let intentionalClose = false;
+      let sessionId = null;
+
+      function saveSessionId(id) {
+        sessionId = id;
+        document.cookie = 'pty_session=' + encodeURIComponent(id) + ';path=/;max-age=600;SameSite=Strict';
+      }
+
+      function loadSessionId() {
+        const match = document.cookie.match(/(?:^|;\s*)pty_session=([^;]*)/);
+        return match ? decodeURIComponent(match[1]) : null;
+      }
+
+      function clearSessionId() {
+        sessionId = null;
+        document.cookie = 'pty_session=;path=/;max-age=0';
+      }
+
+      sessionId = loadSessionId();
 
       function getTerminalFontSize() {
         return window.innerWidth <= 768 ? 16 : 15;
@@ -440,7 +458,10 @@
       }
 
       function connect() {
-        socket = new WebSocket(protocol + '://' + window.location.host + '/ws');
+        let replaying = false;
+        socket = new WebSocket(
+          protocol + '://' + window.location.host + '/ws' + (sessionId ? '?sessionId=' + encodeURIComponent(sessionId) : '')
+        );
 
         socket.addEventListener('open', function () {
           statusElement.textContent = 'Connected';
@@ -456,8 +477,22 @@
 
           try {
             const payload = JSON.parse(event.data);
+            if (payload && payload.type === 'session') {
+              saveSessionId(payload.sessionId);
+              return;
+            }
+            if (payload && payload.type === 'replay-start') {
+              replaying = true;
+              term.clear();
+              return;
+            }
+            if (payload && payload.type === 'replay-end') {
+              replaying = false;
+              return;
+            }
             if (payload && payload.type === 'exit') {
               intentionalClose = true;
+              clearSessionId();
               statusElement.textContent = 'Disconnected';
               term.writeln('');
               term.writeln('\x1b[33mCLI exited (' + payload.code + ').\x1b[0m');
@@ -618,6 +653,7 @@
 
       restartButton.addEventListener('click', function () {
         intentionalClose = true;
+        clearSessionId();
         window.location.reload();
       });
 

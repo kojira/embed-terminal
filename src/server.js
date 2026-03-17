@@ -1,4 +1,5 @@
 const express = require('express');
+const crypto = require('crypto');
 const http = require('http');
 const path = require('path');
 const { spawnSync } = require('child_process');
@@ -11,6 +12,9 @@ const PORT = 3456;
 const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server, path: '/ws' });
+const sessions = new Map(); // sessionId -> { term, buffer, ws, exitPayload, destroyTimer }
+const MAX_BUFFER_LINES = 1000;
+const SESSION_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 
 const publicDir = path.join(__dirname, '..', 'public');
 
@@ -36,6 +40,80 @@ function createPty() {
   });
 }
 
+function createSession(sessionId) {
+  const command = getShellCommand();
+  if (!commandExists(command)) {
+    return { error: `Command "${command}" not found. Please install it first.` };
+  }
+
+  let term;
+  try {
+    term = createPty();
+  } catch (error) {
+    console.error(`Failed to start "${command}":`, error);
+    return { error: `Failed to start "${command}". Make sure the command is installed and accessible.` };
+  }
+
+  const session = {
+    term,
+    buffer: [],
+    ws: null,
+    exitPayload: null,
+    destroyTimer: null,
+  };
+
+  term.on('error', (error) => {
+    console.error(`PTY error for "${command}":`, error);
+  });
+
+  term.onData((data) => {
+    session.buffer.push(data);
+    while (session.buffer.length > MAX_BUFFER_LINES) {
+      session.buffer.shift();
+    }
+    if (session.ws && session.ws.readyState === WebSocket.OPEN) {
+      session.ws.send(data);
+    }
+  });
+
+  term.onExit(({ exitCode }) => {
+    session.exitPayload = JSON.stringify({ type: 'exit', code: exitCode });
+    if (session.ws && session.ws.readyState === WebSocket.OPEN) {
+      session.ws.send(session.exitPayload);
+      session.ws.close();
+    }
+    scheduleDestroy(sessionId);
+  });
+
+  sessions.set(sessionId, session);
+  return { session };
+}
+
+function scheduleDestroy(sessionId) {
+  const session = sessions.get(sessionId);
+  if (!session) return;
+  if (session.destroyTimer) clearTimeout(session.destroyTimer);
+  session.destroyTimer = setTimeout(() => {
+    if (session.term) {
+      try {
+        session.term.kill();
+      } catch (e) {
+        // already dead
+      }
+    }
+    sessions.delete(sessionId);
+    console.log(`Session ${sessionId} destroyed after timeout`);
+  }, SESSION_TIMEOUT_MS);
+}
+
+function cancelDestroy(sessionId) {
+  const session = sessions.get(sessionId);
+  if (session && session.destroyTimer) {
+    clearTimeout(session.destroyTimer);
+    session.destroyTimer = null;
+  }
+}
+
 process.on('uncaughtException', (error) => {
   console.error('Uncaught exception:', error);
 });
@@ -44,81 +122,89 @@ process.on('unhandledRejection', (reason) => {
   console.error('Unhandled rejection:', reason);
 });
 
-wss.on('connection', (ws) => {
+wss.on('connection', (ws, req) => {
+  const url = new URL(req.url, `http://${req.headers.host}`);
+  let sessionId = url.searchParams.get('sessionId');
+
   const sendText = (data) => {
     if (ws.readyState === WebSocket.OPEN) {
       ws.send(data);
     }
   };
 
-  const command = getShellCommand();
-  if (!commandExists(command)) {
-    sendText(`\r\nError: Command "${command}" not found. Please install it first.\r\n`);
-    ws.close();
-    return;
+  let session;
+
+  if (sessionId && sessions.has(sessionId)) {
+    session = sessions.get(sessionId);
+    cancelDestroy(sessionId);
+
+    if (session.ws) {
+      try {
+        session.ws.close();
+      } catch (e) {}
+    }
+    session.ws = ws;
+
+    sendText(JSON.stringify({ type: 'session', sessionId }));
+
+    if (session.exitPayload) {
+      sendText(session.exitPayload);
+      ws.close();
+      return;
+    }
+
+    sendText(JSON.stringify({ type: 'replay-start' }));
+    for (const chunk of session.buffer) {
+      sendText(chunk);
+    }
+    sendText(JSON.stringify({ type: 'replay-end' }));
+  } else {
+    sessionId = crypto.randomUUID();
+    const result = createSession(sessionId);
+    if (result.error) {
+      sendText(`\r\n${result.error}\r\n`);
+      ws.close();
+      return;
+    }
+    session = result.session;
+    session.ws = ws;
+
+    sendText(JSON.stringify({ type: 'session', sessionId }));
   }
 
-  let term;
-  try {
-    term = createPty();
-  } catch (error) {
-    console.error(`Failed to start "${command}":`, error);
-    sendText(`\r\nError: Failed to start "${command}". Make sure the command is installed and accessible.\r\n`);
-    ws.close();
-    return;
-  }
-
-  term.on('error', (error) => {
-    console.error(`PTY error for "${command}":`, error);
-    sendText(`\r\nError: Failed to start "${command}". Make sure the command is installed and accessible.\r\n`);
-    if (ws.readyState === WebSocket.OPEN) {
-      ws.close();
-    }
-  });
-
-  term.onData((data) => {
-    sendText(data);
-  });
-
-  term.onExit(({ exitCode }) => {
-    if (ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: 'exit', code: exitCode }));
-      ws.close();
-    }
-  });
-
-  ws.on('message', (message, isBinary) => {
-    const input = isBinary ? message.toString() : message.toString();
+  ws.on('message', (message) => {
+    const input = message.toString();
 
     try {
       const parsed = JSON.parse(input);
       if (parsed && parsed.type === 'resize') {
         const cols = Number(parsed.cols);
         const rows = Number(parsed.rows);
-
         if (Number.isFinite(cols) && Number.isFinite(rows) && cols > 0 && rows > 0) {
-          term.resize(cols, rows);
+          session.term.resize(cols, rows);
         }
         return;
       }
-    } catch (error) {
-      // Non-JSON messages are terminal input and should be passed through.
+    } catch (e) {
+      // Non-JSON = terminal input
     }
 
-    if (term) {
-      term.write(input);
+    if (session.term) {
+      session.term.write(input);
     }
   });
 
   ws.on('close', () => {
-    if (term) {
-      term.kill();
+    session.ws = null;
+    if (!session.exitPayload) {
+      scheduleDestroy(sessionId);
     }
   });
 
   ws.on('error', () => {
-    if (term) {
-      term.kill();
+    session.ws = null;
+    if (!session.exitPayload) {
+      scheduleDestroy(sessionId);
     }
   });
 });
