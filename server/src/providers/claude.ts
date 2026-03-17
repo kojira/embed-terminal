@@ -24,6 +24,63 @@ function extractAssistantText(payload: unknown): string {
     .join("") ?? "";
 }
 
+function formatToolInput(input: unknown): string {
+  if (input == null) {
+    return "";
+  }
+
+  if (typeof input === "string") {
+    return input;
+  }
+
+  try {
+    return JSON.stringify(input, null, 2);
+  } catch {
+    return String(input);
+  }
+}
+
+function extractToolUseText(payload: unknown): string {
+  if (!payload || typeof payload !== "object") {
+    return "";
+  }
+
+  const record = payload as {
+    tool?: {
+      name?: string;
+      input?: unknown;
+    };
+    name?: string;
+    input?: unknown;
+  };
+
+  const toolName =
+    (typeof record.tool?.name === "string" && record.tool.name) ||
+    (typeof record.name === "string" && record.name) ||
+    "Unknown";
+  const input = record.tool?.input ?? record.input;
+  const formattedInput = formatToolInput(input);
+
+  return `\n\n🔧 Using tool: ${toolName}\n${formattedInput ? `${formattedInput}\n` : ""}`;
+}
+
+function extractToolResultText(payload: unknown): string {
+  if (!payload || typeof payload !== "object") {
+    return "";
+  }
+
+  const record = payload as {
+    content?: unknown;
+    result?: unknown;
+    tool_result?: unknown;
+  };
+
+  const content = record.content ?? record.result ?? record.tool_result;
+  const formattedContent = formatToolInput(content);
+
+  return formattedContent ? `\n📋 Tool result: ${formattedContent}\n\n` : "";
+}
+
 export class ClaudeProvider implements AIProvider {
   name = "claude";
 
@@ -33,7 +90,7 @@ export class ClaudeProvider implements AIProvider {
     return await new Promise<string>((resolve, reject) => {
       const child = spawn(
         "claude",
-        ["--print", "--output-format", "stream-json", "--verbose", "-p", prompt],
+        ["--print", "--dangerously-skip-permissions", "--output-format", "stream-json", "--verbose", "-p", prompt],
         {
           stdio: ["ignore", "pipe", "pipe"],
         },
@@ -82,6 +139,20 @@ export class ClaudeProvider implements AIProvider {
               const text = extractAssistantText(parsed);
               if (text) {
                 streamedText += text;
+                onChunk(text);
+              }
+            }
+
+            if (parsed.type === "tool_use") {
+              const text = extractToolUseText(parsed);
+              if (text) {
+                onChunk(text);
+              }
+            }
+
+            if (parsed.type === "tool_result") {
+              const text = extractToolResultText(parsed);
+              if (text) {
                 onChunk(text);
               }
             }
