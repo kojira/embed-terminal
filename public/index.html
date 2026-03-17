@@ -23,6 +23,7 @@
         --text: #e6edf7;
         --muted: #9aa6bf;
         --accent: #7dd3fc;
+        --mobile-control-bar-height: 132px;
       }
 
       * {
@@ -160,6 +161,73 @@
         background: rgba(154, 166, 191, 0.28);
         border-radius: 999px;
       }
+
+      .mobile-control-bar {
+        display: none;
+      }
+
+      @media (max-width: 768px) {
+        .app {
+          padding: 12px 12px calc(12px + var(--mobile-control-bar-height));
+        }
+
+        .terminal-shell {
+          min-height: calc(100vh - 24px - var(--mobile-control-bar-height));
+          padding: 14px;
+        }
+
+        #terminal {
+          min-height: calc(100vh - 118px - var(--mobile-control-bar-height));
+        }
+
+        .mobile-control-bar {
+          position: fixed;
+          left: 0;
+          right: 0;
+          bottom: 0;
+          z-index: 10;
+          display: grid;
+          grid-template-rows: repeat(2, minmax(0, 1fr));
+          gap: 8px;
+          padding: 10px 12px calc(10px + env(safe-area-inset-bottom, 0px));
+          background: rgba(20, 22, 37, 0.86);
+          backdrop-filter: blur(14px);
+          -webkit-backdrop-filter: blur(14px);
+          border-top: 1px solid var(--panel-border);
+        }
+
+        .mobile-control-row {
+          display: grid;
+          gap: 8px;
+        }
+
+        .mobile-control-row[data-row="special"] {
+          grid-template-columns: repeat(4, minmax(0, 1fr));
+        }
+
+        .mobile-control-row[data-row="arrows"] {
+          grid-template-columns: repeat(6, minmax(0, 1fr));
+        }
+
+        .mobile-control-button {
+          min-height: 44px;
+          border: 1px solid var(--panel-border);
+          border-radius: 12px;
+          background: rgba(255, 255, 255, 0.05);
+          color: var(--text);
+          font: inherit;
+          font-size: 14px;
+          cursor: pointer;
+          touch-action: manipulation;
+          transition: background 120ms ease, border-color 120ms ease;
+        }
+
+        .mobile-control-button:active,
+        .mobile-control-button.is-pressed {
+          background: rgba(255, 255, 255, 0.12);
+          border-color: rgba(125, 211, 252, 0.28);
+        }
+      }
     </style>
   </head>
   <body>
@@ -177,6 +245,22 @@
           </div>
         </div>
       </div>
+      <div class="mobile-control-bar" aria-label="Mobile terminal controls">
+        <div class="mobile-control-row" data-row="special">
+          <button class="mobile-control-button" type="button" data-key="enter">Enter</button>
+          <button class="mobile-control-button" type="button" data-key="tab">Tab</button>
+          <button class="mobile-control-button" type="button" data-key="esc">Esc</button>
+          <button class="mobile-control-button" type="button" data-key="ctrl-c">Ctrl+C</button>
+        </div>
+        <div class="mobile-control-row" data-row="arrows">
+          <button class="mobile-control-button" type="button" data-key="left">←</button>
+          <button class="mobile-control-button" type="button" data-key="up">↑</button>
+          <button class="mobile-control-button" type="button" data-key="down">↓</button>
+          <button class="mobile-control-button" type="button" data-key="right">→</button>
+          <button class="mobile-control-button" type="button" data-key="y">Y</button>
+          <button class="mobile-control-button" type="button" data-key="n">N</button>
+        </div>
+      </div>
     </div>
 
     <script src="https://unpkg.com/xterm@5.3.0/lib/xterm.js"></script>
@@ -187,6 +271,7 @@
       const overlay = document.getElementById('overlay');
       const restartButton = document.getElementById('restart');
       const statusElement = document.getElementById('status');
+      const mobileControlButtons = document.querySelectorAll('.mobile-control-button');
 
       const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
       const socket = new WebSocket(protocol + '://' + window.location.host + '/ws');
@@ -263,6 +348,64 @@
         if (socket.readyState === WebSocket.OPEN) {
           socket.send(data);
         }
+      });
+
+      function sendControlKey(data) {
+        if (socket.readyState !== WebSocket.OPEN) {
+          return;
+        }
+
+        socket.send(data);
+        term.focus();
+      }
+
+      function setPressedState(button, pressed) {
+        button.classList.toggle('is-pressed', pressed);
+      }
+
+      const mobileControlKeyMap = {
+        enter: '\r',
+        tab: '\t',
+        esc: '\x1b',
+        'ctrl-c': '\x03',
+        left: '\x1b[D',
+        up: '\x1b[A',
+        down: '\x1b[B',
+        right: '\x1b[C',
+        y: 'y',
+        n: 'n'
+      };
+
+      mobileControlButtons.forEach(function (button) {
+        const keyData = mobileControlKeyMap[button.dataset.key] || '';
+        let touched = false;
+
+        button.addEventListener('touchstart', function (event) {
+          event.preventDefault();
+          touched = true;
+          setPressedState(button, true);
+          sendControlKey(keyData);
+        }, { passive: false });
+
+        button.addEventListener('touchend', function () {
+          setPressedState(button, false);
+          window.setTimeout(function () {
+            touched = false;
+          }, 0);
+        });
+
+        button.addEventListener('touchcancel', function () {
+          setPressedState(button, false);
+          touched = false;
+        });
+
+        button.addEventListener('click', function () {
+          if (touched) {
+            return;
+          }
+
+          sendControlKey(keyData);
+        });
       });
 
       socket.addEventListener('open', function () {
