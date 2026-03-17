@@ -364,7 +364,7 @@
 
       function saveSessionId(id) {
         sessionId = id;
-        document.cookie = 'pty_session=' + encodeURIComponent(id) + ';path=/;max-age=1800;SameSite=Strict';
+        document.cookie = 'pty_session=' + encodeURIComponent(id) + ';path=/;max-age=600;SameSite=Strict';
       }
 
       function loadSessionId() {
@@ -479,6 +479,9 @@
             const payload = JSON.parse(event.data);
             if (payload && payload.type === 'session') {
               saveSessionId(payload.sessionId);
+              if (payload.resumed) {
+                term.writeln('\r\n\x1b[1;36mSession restored with --resume\x1b[0m\r\n');
+              }
               return;
             }
             if (payload && payload.type === 'replay-start') {

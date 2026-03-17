@@ -14,7 +14,7 @@ const server = http.createServer(app);
 const wss = new WebSocket.Server({ server, path: '/ws' });
 const sessions = new Map(); // sessionId -> { term, buffer, ws, exitPayload, destroyTimer }
 const MAX_BUFFER_LINES = 1000;
-const SESSION_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
+const SESSION_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 
 const publicDir = path.join(__dirname, '..', 'public');
 
@@ -30,8 +30,13 @@ function commandExists(command) {
   return result.status === 0;
 }
 
-function createPty() {
-  return pty.spawn(getShellCommand(), [], {
+function createPty(options) {
+  const command = getShellCommand();
+  const args = [];
+  if (options && options.resume && command === 'claude') {
+    args.push('--resume');
+  }
+  return pty.spawn(command, args, {
     name: 'xterm-256color',
     cols: 80,
     rows: 24,
@@ -40,7 +45,7 @@ function createPty() {
   });
 }
 
-function createSession(sessionId) {
+function createSession(sessionId, options) {
   const command = getShellCommand();
   if (!commandExists(command)) {
     return { error: `Command "${command}" not found. Please install it first.` };
@@ -48,7 +53,7 @@ function createSession(sessionId) {
 
   let term;
   try {
-    term = createPty();
+    term = createPty(options);
   } catch (error) {
     console.error(`Failed to start "${command}":`, error);
     return { error: `Failed to start "${command}". Make sure the command is installed and accessible.` };
@@ -159,17 +164,19 @@ wss.on('connection', (ws, req) => {
     }
     sendText(JSON.stringify({ type: 'replay-end' }));
   } else {
+    // If client sent a sessionId that no longer exists, it is an expired session - use --resume
+    const isExpired = !!sessionId;
     sessionId = crypto.randomUUID();
-    const result = createSession(sessionId);
+    const result = createSession(sessionId, { resume: isExpired });
     if (result.error) {
-      sendText(`\r\n${result.error}\r\n`);
+      sendText('\r\n' + result.error + '\r\n');
       ws.close();
       return;
     }
     session = result.session;
     session.ws = ws;
 
-    sendText(JSON.stringify({ type: 'session', sessionId }));
+    sendText(JSON.stringify({ type: 'session', sessionId, resumed: isExpired }));
   }
 
   ws.on('message', (message) => {
