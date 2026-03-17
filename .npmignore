@@ -1,5 +1,5 @@
 node_modules/
-dist/
+.git/
+.gitignore
 *.tsbuildinfo
-.DS_Store
 hello2.txt
