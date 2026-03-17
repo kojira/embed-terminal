@@ -327,18 +327,18 @@
       </div>
       <div class="mobile-control-bar" aria-label="Mobile terminal controls">
         <div class="mobile-control-row" data-row="special">
-          <button class="mobile-control-button" type="button" data-key="enter">Enter</button>
-          <button class="mobile-control-button" type="button" data-key="tab">Tab</button>
-          <button class="mobile-control-button" type="button" data-key="esc">Esc</button>
-          <button class="mobile-control-button" type="button" data-key="ctrl-c">Ctrl+C</button>
+          <button class="mobile-control-button" type="button" tabindex="-1" data-key="enter">Enter</button>
+          <button class="mobile-control-button" type="button" tabindex="-1" data-key="tab">Tab</button>
+          <button class="mobile-control-button" type="button" tabindex="-1" data-key="esc">Esc</button>
+          <button class="mobile-control-button" type="button" tabindex="-1" data-key="ctrl-c">Ctrl+C</button>
         </div>
         <div class="mobile-control-row" data-row="arrows">
-          <button class="mobile-control-button" type="button" data-key="left">←</button>
-          <button class="mobile-control-button" type="button" data-key="up">↑</button>
-          <button class="mobile-control-button" type="button" data-key="down">↓</button>
-          <button class="mobile-control-button" type="button" data-key="right">→</button>
-          <button class="mobile-control-button" type="button" data-key="y">Y</button>
-          <button class="mobile-control-button" type="button" data-key="n">N</button>
+          <button class="mobile-control-button" type="button" tabindex="-1" data-key="left">←</button>
+          <button class="mobile-control-button" type="button" tabindex="-1" data-key="up">↑</button>
+          <button class="mobile-control-button" type="button" tabindex="-1" data-key="down">↓</button>
+          <button class="mobile-control-button" type="button" tabindex="-1" data-key="right">→</button>
+          <button class="mobile-control-button" type="button" tabindex="-1" data-key="y">Y</button>
+          <button class="mobile-control-button" type="button" tabindex="-1" data-key="n">N</button>
         </div>
       </div>
     </div>
@@ -450,7 +450,9 @@
         }
 
         socket.send(data);
-        term.focus();
+        if (document.activeElement) {
+          document.activeElement.blur();
+        }
       }
 
       function sendImeInput() {
@@ -488,6 +490,9 @@
 
         button.addEventListener('touchstart', function (event) {
           event.preventDefault();
+          if (document.activeElement) {
+            document.activeElement.blur();
+          }
           touched = true;
           setPressedState(button, true);
           sendControlKey(keyData);
@@ -510,6 +515,9 @@
             return;
           }
 
+          if (document.activeElement) {
+            document.activeElement.blur();
+          }
           sendControlKey(keyData);
         });
       });
