@@ -356,7 +356,10 @@
       const mobileControlButtons = document.querySelectorAll('.mobile-control-button');
 
       const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
-      const socket = new WebSocket(protocol + '://' + window.location.host + '/ws');
+      let socket = null;
+      let reconnectAttempts = 0;
+      let reconnectTimer = null;
+      let intentionalClose = false;
 
       function getTerminalFontSize() {
         return window.innerWidth <= 768 ? 16 : 15;
@@ -408,7 +411,7 @@
       term.writeln('');
 
       function sendResize() {
-        if (socket.readyState !== WebSocket.OPEN) {
+        if (!socket || socket.readyState !== WebSocket.OPEN) {
           return;
         }
 
@@ -419,6 +422,66 @@
             rows: term.rows
           })
         );
+      }
+
+      function scheduleReconnect() {
+        if (reconnectTimer) {
+          return;
+        }
+
+        const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000);
+        term.writeln('\r\n\x1b[33mReconnecting in ' + (delay / 1000) + 's...\x1b[0m');
+        statusElement.textContent = 'Reconnecting...';
+        reconnectTimer = setTimeout(function () {
+          reconnectTimer = null;
+          reconnectAttempts++;
+          connect();
+        }, delay);
+      }
+
+      function connect() {
+        socket = new WebSocket(protocol + '://' + window.location.host + '/ws');
+
+        socket.addEventListener('open', function () {
+          statusElement.textContent = 'Connected';
+          reconnectAttempts = 0;
+          fitAddon.fit();
+          sendResize();
+        });
+
+        socket.addEventListener('message', function (event) {
+          if (typeof event.data !== 'string') {
+            return;
+          }
+
+          try {
+            const payload = JSON.parse(event.data);
+            if (payload && payload.type === 'exit') {
+              intentionalClose = true;
+              statusElement.textContent = 'Disconnected';
+              term.writeln('');
+              term.writeln('\x1b[33mCLI exited (' + payload.code + ').\x1b[0m');
+              overlay.classList.add('visible');
+              return;
+            }
+          } catch (error) {
+            // Terminal data is plain text, not JSON.
+          }
+
+          term.write(event.data);
+        });
+
+        socket.addEventListener('close', function () {
+          statusElement.textContent = 'Disconnected';
+          if (!intentionalClose) {
+            scheduleReconnect();
+          }
+        });
+
+        socket.addEventListener('error', function () {
+          statusElement.textContent = 'Connection error';
+          term.writeln('\r\n\x1b[31mWebSocket connection error.\x1b[0m');
+        });
       }
 
       window.addEventListener('resize', function () {
@@ -439,13 +502,13 @@
       }
 
       term.onData(function (data) {
-        if (socket.readyState === WebSocket.OPEN) {
+        if (socket && socket.readyState === WebSocket.OPEN) {
           socket.send(data);
         }
       });
 
       function sendControlKey(data) {
-        if (socket.readyState !== WebSocket.OPEN) {
+        if (!socket || socket.readyState !== WebSocket.OPEN) {
           return;
         }
 
@@ -457,7 +520,7 @@
 
       function sendImeInput() {
         const text = imeInput.value;
-        if (!text || socket.readyState !== WebSocket.OPEN) {
+        if (!text || !socket || socket.readyState !== WebSocket.OPEN) {
           imeInput.focus();
           return;
         }
@@ -535,45 +598,30 @@
         sendImeInput();
       });
 
-      socket.addEventListener('open', function () {
-        statusElement.textContent = 'Connected';
-        fitAddon.fit();
-        sendResize();
-      });
-
-      socket.addEventListener('message', function (event) {
-        if (typeof event.data !== 'string') {
-          return;
-        }
-
-        try {
-          const payload = JSON.parse(event.data);
-          if (payload && payload.type === 'exit') {
-            statusElement.textContent = 'Disconnected';
-            term.writeln('');
-            term.writeln('\x1b[33mCLI exited (' + payload.code + ').\x1b[0m');
-            overlay.classList.add('visible');
-            return;
+      document.addEventListener('visibilitychange', function () {
+        if (
+          document.visibilityState === 'visible' &&
+          socket &&
+          socket.readyState !== WebSocket.OPEN &&
+          socket.readyState !== WebSocket.CONNECTING
+        ) {
+          if (reconnectTimer) {
+            clearTimeout(reconnectTimer);
+            reconnectTimer = null;
           }
-        } catch (error) {
-          // Terminal data is plain text, not JSON.
+          reconnectAttempts = 0;
+          term.writeln('\r\n\x1b[1;36mReconnecting...\x1b[0m');
+          statusElement.textContent = 'Reconnecting...';
+          connect();
         }
-
-        term.write(event.data);
-      });
-
-      socket.addEventListener('close', function () {
-        statusElement.textContent = 'Disconnected';
-      });
-
-      socket.addEventListener('error', function () {
-        statusElement.textContent = 'Connection error';
-        term.writeln('\r\n\x1b[31mWebSocket connection error.\x1b[0m');
       });
 
       restartButton.addEventListener('click', function () {
+        intentionalClose = true;
         window.location.reload();
       });
+
+      connect();
     </script>
   </body>
 </html>
