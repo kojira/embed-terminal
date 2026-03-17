@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CLI Chat Terminal</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/xterm@5.3.0/css/xterm.css"
+    />
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0f1020;
+        --panel: #1a1a2e;
+        --panel-border: rgba(137, 180, 250, 0.18);
+        --text: #e6edf7;
+        --muted: #9aa6bf;
+        --accent: #7dd3fc;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background:
+          radial-gradient(circle at top, rgba(125, 211, 252, 0.12), transparent 30%),
+          linear-gradient(180deg, #111322 0%, var(--bg) 100%);
+        color: var(--text);
+        font-family: "JetBrains Mono", monospace;
+      }
+
+      .app {
+        min-height: 100vh;
+        padding: 20px;
+        display: flex;
+        align-items: stretch;
+        justify-content: center;
+      }
+
+      .terminal-shell {
+        position: relative;
+        width: min(1200px, 100%);
+        min-height: calc(100vh - 40px);
+        background: rgba(26, 26, 46, 0.94);
+        border: 1px solid var(--panel-border);
+        border-radius: 20px;
+        box-shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
+        padding: 18px;
+        overflow: hidden;
+      }
+
+      .terminal-shell::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        border-radius: 20px;
+        background: linear-gradient(180deg, rgba(255, 255, 255, 0.04), transparent 24%);
+      }
+
+      .terminal-header {
+        position: relative;
+        z-index: 1;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 14px;
+        padding: 2px 4px 10px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .dots {
+        display: flex;
+        gap: 8px;
+      }
+
+      .dots span {
+        width: 11px;
+        height: 11px;
+        border-radius: 999px;
+      }
+
+      .dots span:nth-child(1) {
+        background: #ff5f57;
+      }
+
+      .dots span:nth-child(2) {
+        background: #febc2e;
+      }
+
+      .dots span:nth-child(3) {
+        background: #28c840;
+      }
+
+      #terminal {
+        position: relative;
+        z-index: 1;
+        height: calc(100% - 42px);
+        min-height: calc(100vh - 128px);
+        padding: 14px;
+        border-radius: 14px;
+        background: #141625;
+      }
+
+      #overlay {
+        position: absolute;
+        inset: 0;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgba(15, 16, 32, 0.72);
+        z-index: 2;
+      }
+
+      #overlay.visible {
+        display: flex;
+      }
+
+      .overlay-card {
+        text-align: center;
+        background: rgba(20, 22, 37, 0.96);
+        border: 1px solid rgba(125, 211, 252, 0.24);
+        border-radius: 16px;
+        padding: 20px 22px;
+        box-shadow: 0 14px 48px rgba(0, 0, 0, 0.35);
+      }
+
+      .overlay-card p {
+        margin: 0 0 14px;
+        color: var(--muted);
+        font-size: 14px;
+      }
+
+      .overlay-card button {
+        border: 0;
+        border-radius: 999px;
+        padding: 10px 16px;
+        font: inherit;
+        color: #08111d;
+        background: var(--accent);
+        cursor: pointer;
+      }
+
+      .xterm-viewport::-webkit-scrollbar {
+        width: 10px;
+      }
+
+      .xterm-viewport::-webkit-scrollbar-thumb {
+        background: rgba(154, 166, 191, 0.28);
+        border-radius: 999px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app">
+      <div class="terminal-shell">
+        <div class="terminal-header">
+          <div class="dots"><span></span><span></span><span></span></div>
+          <div id="status">Connecting...</div>
+        </div>
+        <div id="terminal"></div>
+        <div id="overlay">
+          <div class="overlay-card">
+            <p>CLI exited.</p>
+            <button id="restart" type="button">Restart session</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script src="https://unpkg.com/xterm@5.3.0/lib/xterm.js"></script>
+    <script src="https://unpkg.com/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
+    <script src="https://unpkg.com/xterm-addon-web-links@0.9.0/lib/xterm-addon-web-links.js"></script>
+    <script>
+      const terminalElement = document.getElementById('terminal');
+      const overlay = document.getElementById('overlay');
+      const restartButton = document.getElementById('restart');
+      const statusElement = document.getElementById('status');
+
+      const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+      const socket = new WebSocket(protocol + '://' + window.location.host + '/ws');
+      const term = new Terminal({
+        convertEol: true,
+        cursorBlink: true,
+        fontFamily: '"JetBrains Mono", monospace',
+        fontSize: 14,
+        lineHeight: 1.35,
+        theme: {
+          background: '#141625',
+          foreground: '#e6edf7',
+          cursor: '#7dd3fc',
+          selectionBackground: 'rgba(125, 211, 252, 0.25)',
+          black: '#141625',
+          red: '#ff7b72',
+          green: '#7ee787',
+          yellow: '#f2cc60',
+          blue: '#79c0ff',
+          magenta: '#d2a8ff',
+          cyan: '#7dd3fc',
+          white: '#e6edf7',
+          brightBlack: '#6e7681',
+          brightRed: '#ffa198',
+          brightGreen: '#56d364',
+          brightYellow: '#e3b341',
+          brightBlue: '#a5d6ff',
+          brightMagenta: '#e2b8ff',
+          brightCyan: '#a5f3fc',
+          brightWhite: '#f0f6fc'
+        }
+      });
+
+      const fitAddon = new FitAddon.FitAddon();
+      const webLinksAddon = new WebLinksAddon.WebLinksAddon();
+
+      term.loadAddon(fitAddon);
+      term.loadAddon(webLinksAddon);
+      term.open(terminalElement);
+      fitAddon.fit();
+      term.focus();
+      term.writeln('\x1b[1;36mCLI chat terminal\x1b[0m');
+      term.writeln('\x1b[2mStarting interactive session...\x1b[0m');
+      term.writeln('');
+
+      function sendResize() {
+        if (socket.readyState !== WebSocket.OPEN) {
+          return;
+        }
+
+        socket.send(
+          JSON.stringify({
+            type: 'resize',
+            cols: term.cols,
+            rows: term.rows
+          })
+        );
+      }
+
+      window.addEventListener('resize', function () {
+        fitAddon.fit();
+        sendResize();
+      });
+
+      if (window.ResizeObserver) {
+        const observer = new ResizeObserver(function () {
+          fitAddon.fit();
+          sendResize();
+        });
+        observer.observe(terminalElement);
+      }
+
+      term.onData(function (data) {
+        if (socket.readyState === WebSocket.OPEN) {
+          socket.send(data);
+        }
+      });
+
+      socket.addEventListener('open', function () {
+        statusElement.textContent = 'Connected';
+        fitAddon.fit();
+        sendResize();
+      });
+
+      socket.addEventListener('message', function (event) {
+        if (typeof event.data !== 'string') {
+          return;
+        }
+
+        try {
+          const payload = JSON.parse(event.data);
+          if (payload && payload.type === 'exit') {
+            statusElement.textContent = 'Disconnected';
+            term.writeln('');
+            term.writeln('\x1b[33mCLI exited (' + payload.code + ').\x1b[0m');
+            overlay.classList.add('visible');
+            return;
+          }
+        } catch (error) {
+          // Terminal data is plain text, not JSON.
+        }
+
+        term.write(event.data);
+      });
+
+      socket.addEventListener('close', function () {
+        statusElement.textContent = 'Disconnected';
+      });
+
+      socket.addEventListener('error', function () {
+        statusElement.textContent = 'Connection error';
+        term.writeln('\r\n\x1b[31mWebSocket connection error.\x1b[0m');
+      });
+
+      restartButton.addEventListener('click', function () {
+        window.location.reload();
+      });
+    </script>
+  </body>
+</html>

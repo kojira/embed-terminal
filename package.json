@@ -2,19 +2,13 @@
   "name": "cli-chat-poc",
   "private": true,
   "version": "1.0.0",
-  "workspaces": [
-    "server",
-    "client"
-  ],
   "scripts": {
-    "dev:server": "cd server && npx tsx src/index.ts",
-    "dev:client": "cd client && npx vite",
-    "dev": "npx concurrently \"npm run dev:server\" \"npm run dev:client\""
+    "start": "node src/server.js",
+    "dev": "node src/server.js"
   },
-  "overrides": {
-    "hono": "4.7.2"
-  },
-  "devDependencies": {
-    "concurrently": "^9.1.2"
+  "dependencies": {
+    "express": "^5.1.0",
+    "node-pty": "^1.0.0",
+    "ws": "^8.18.1"
   }
 }
