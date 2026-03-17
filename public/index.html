@@ -306,7 +306,7 @@
         }
 
         .mobile-control-row[data-row="special"] {
-          grid-template-columns: repeat(5, minmax(0, 1fr));
+          grid-template-columns: repeat(6, minmax(0, 1fr));
         }
 
         .mobile-control-row[data-row="arrows"] {
@@ -337,6 +337,13 @@
           border-color: rgba(125, 211, 252, 0.5);
           color: #7dd3fc;
           box-shadow: 0 0 10px rgba(125, 211, 252, 0.2);
+        }
+
+        .ctrl-toggle-btn.is-active {
+          background: rgba(126, 231, 135, 0.25);
+          border-color: rgba(126, 231, 135, 0.5);
+          color: #7ee787;
+          box-shadow: 0 0 10px rgba(126, 231, 135, 0.2);
         }
       }
     </style>
@@ -376,6 +383,7 @@
       <div class="mobile-control-bar" aria-label="Mobile terminal controls">
         <div class="mobile-control-row" data-row="special">
           <button class="mobile-control-button shift-toggle-btn" type="button" tabindex="-1" data-key="shift">⇧</button>
+          <button class="mobile-control-button ctrl-toggle-btn" type="button" tabindex="-1" data-key="ctrl">Ctrl</button>
           <button class="mobile-control-button" type="button" tabindex="-1" data-key="enter">Enter</button>
           <button class="mobile-control-button" type="button" tabindex="-1" data-key="tab">Tab</button>
           <button class="mobile-control-button" type="button" tabindex="-1" data-key="esc">Esc</button>
@@ -404,6 +412,7 @@
       const imeSendButton = document.getElementById('ime-send-btn');
       const mobileControlButtons = document.querySelectorAll('.mobile-control-button');
       const shiftToggleButton = document.querySelector('.shift-toggle-btn');
+      const ctrlToggleButton = document.querySelector('.ctrl-toggle-btn');
 
       const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
       const FONT_SIZE_MIN = 8;
@@ -415,6 +424,7 @@
       let intentionalClose = false;
       let sessionId = null;
       let shiftActive = false;
+      let ctrlActive = false;
 
       function saveSessionId(id) {
         sessionId = id;
@@ -620,7 +630,10 @@
       term.onData(function (data) {
         if (socket && socket.readyState === WebSocket.OPEN) {
           if (shiftActive && /^[ -~]$/.test(data)) {
-            socket.send(data.toUpperCase());
+            data = data.toUpperCase();
+          }
+          if (ctrlActive && /^[A-Za-z]$/.test(data)) {
+            socket.send(applyCtrlModifier(data));
             return;
           }
           socket.send(data);
@@ -663,12 +676,45 @@
         }
       }
 
+      function toggleCtrlLock() {
+        ctrlActive = !ctrlActive;
+        if (ctrlToggleButton) {
+          ctrlToggleButton.classList.toggle('is-active', ctrlActive);
+        }
+      }
+
+      function toCtrlCharacter(data) {
+        return String.fromCharCode(data.toUpperCase().charCodeAt(0) - 64);
+      }
+
+      function applyCtrlModifier(data) {
+        if (!ctrlActive) {
+          return data;
+        }
+
+        switch (data) {
+          case '\x1b[A':
+            return '\x1b[1;5A';
+          case '\x1b[B':
+            return '\x1b[1;5B';
+          case '\x1b[C':
+            return '\x1b[1;5C';
+          case '\x1b[D':
+            return '\x1b[1;5D';
+          default:
+            if (/^[A-Za-z]$/.test(data)) {
+              return toCtrlCharacter(data);
+            }
+            return data;
+        }
+      }
+
       function sendControlKey(data) {
         if (!socket || socket.readyState !== WebSocket.OPEN) {
           return;
         }
 
-        socket.send(applyShiftModifier(data));
+        socket.send(applyCtrlModifier(applyShiftModifier(data)));
         if (document.activeElement) {
           document.activeElement.blur();
         }
@@ -681,7 +727,14 @@
           return;
         }
 
-        socket.send((shiftActive ? text.toUpperCase() : text) + '\n');
+        let output = shiftActive ? text.toUpperCase() : text;
+        if (ctrlActive) {
+          output = output.split('').map(function (char) {
+            return /^[A-Za-z]$/.test(char) ? toCtrlCharacter(char) : char;
+          }).join('');
+        }
+
+        socket.send(output + '\n');
         imeInput.value = '';
         imeInput.focus();
       }
@@ -719,6 +772,10 @@
             toggleShiftLock();
             return;
           }
+          if (key === 'ctrl') {
+            toggleCtrlLock();
+            return;
+          }
           sendControlKey(keyData);
         }, { passive: false });
 
@@ -744,6 +801,10 @@
           }
           if (key === 'shift') {
             toggleShiftLock();
+            return;
+          }
+          if (key === 'ctrl') {
+            toggleCtrlLock();
             return;
           }
           sendControlKey(keyData);
