@@ -150,7 +150,6 @@
         min-height: 0;
         max-height: 80vh;
         overflow: hidden;
-        touch-action: pan-y;
         padding: 14px;
         border-radius: 14px;
         background: #141625;
@@ -258,13 +257,6 @@
         border-radius: 999px;
       }
 
-      .xterm-viewport {
-        -webkit-overflow-scrolling: touch;
-        scroll-behavior: smooth;
-        overscroll-behavior: contain;
-        touch-action: pan-y;
-      }
-
       .mobile-control-bar {
         display: none;
       }
@@ -283,10 +275,6 @@
           max-height: calc(80vh - var(--mobile-control-bar-height));
         }
 
-        .xterm-viewport {
-          -webkit-overflow-scrolling: touch;
-        }
-
         .ime-input-bar {
           padding: 8px;
         }
@@ -294,6 +282,26 @@
         .ime-input,
         .ime-send-btn {
           min-height: 44px;
+        }
+
+        .xterm-viewport::-webkit-scrollbar {
+          width: 10px;
+          display: block;
+        }
+
+        .xterm-viewport::-webkit-scrollbar-thumb {
+          background: rgba(154, 166, 191, 0.5);
+          border-radius: 999px;
+          min-height: 40px;
+        }
+
+        .xterm-viewport::-webkit-scrollbar-track {
+          background: rgba(0, 0, 0, 0.2);
+          border-radius: 999px;
+        }
+
+        .xterm-viewport {
+          overflow-y: scroll !important;
         }
 
         .mobile-control-bar {
@@ -470,7 +478,6 @@
         fontFamily: '"JetBrains Mono", monospace',
         fontSize: getTerminalFontSize(),
         lineHeight: 1.35,
-        scrollSensitivity: 3,
         theme: {
           background: '#141625',
           foreground: '#e6edf7',
@@ -501,10 +508,6 @@
       term.loadAddon(fitAddon);
       term.loadAddon(webLinksAddon);
       term.open(terminalElement);
-      const viewport = terminalElement.querySelector(".xterm-viewport");
-      if (viewport) {
-        viewport.style.touchAction = "pan-y";
-      }
       window.requestAnimationFrame(function () {
         fitAddon.fit();
         sendResize();
