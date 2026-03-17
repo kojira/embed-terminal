@@ -119,6 +119,60 @@
         background: #141625;
       }
 
+      .ime-input-bar {
+        position: relative;
+        z-index: 1;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-top: 10px;
+        padding: 10px;
+        border: 1px solid var(--panel-border);
+        border-radius: 14px;
+        background: #141625;
+      }
+
+      .ime-input {
+        flex: 1;
+        min-width: 0;
+        border: 1px solid rgba(137, 180, 250, 0.14);
+        border-radius: 10px;
+        padding: 11px 13px;
+        background: rgba(255, 255, 255, 0.04);
+        color: var(--text);
+        font: inherit;
+        outline: none;
+      }
+
+      .ime-input::placeholder {
+        color: var(--muted);
+      }
+
+      .ime-input:focus {
+        border-color: rgba(125, 211, 252, 0.4);
+        box-shadow: 0 0 0 3px rgba(125, 211, 252, 0.12);
+      }
+
+      .ime-send-btn {
+        flex: 0 0 auto;
+        border: 0;
+        border-radius: 10px;
+        padding: 11px 16px;
+        background: var(--accent);
+        color: #08111d;
+        font: inherit;
+        cursor: pointer;
+        transition: filter 120ms ease, transform 120ms ease;
+      }
+
+      .ime-send-btn:hover {
+        filter: brightness(1.05);
+      }
+
+      .ime-send-btn:active {
+        transform: translateY(1px);
+      }
+
       #overlay {
         position: absolute;
         inset: 0;
@@ -185,6 +239,15 @@
           max-height: calc(80vh - var(--mobile-control-bar-height));
         }
 
+        .ime-input-bar {
+          padding: 8px;
+        }
+
+        .ime-input,
+        .ime-send-btn {
+          min-height: 44px;
+        }
+
         .mobile-control-bar {
           position: fixed;
           left: 0;
@@ -243,6 +306,18 @@
           <div id="status">Connecting...</div>
         </div>
         <div id="terminal"></div>
+        <div class="ime-input-bar">
+          <input
+            class="ime-input"
+            id="ime-input"
+            type="text"
+            placeholder="IME入力 / Type here..."
+            autocomplete="off"
+            autocapitalize="off"
+            spellcheck="false"
+          />
+          <button class="ime-send-btn" id="ime-send-btn" type="button">Send</button>
+        </div>
         <div id="overlay">
           <div class="overlay-card">
             <p>CLI exited.</p>
@@ -276,6 +351,8 @@
       const overlay = document.getElementById('overlay');
       const restartButton = document.getElementById('restart');
       const statusElement = document.getElementById('status');
+      const imeInput = document.getElementById('ime-input');
+      const imeSendButton = document.getElementById('ime-send-btn');
       const mobileControlButtons = document.querySelectorAll('.mobile-control-button');
 
       const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
@@ -376,6 +453,18 @@
         term.focus();
       }
 
+      function sendImeInput() {
+        const text = imeInput.value;
+        if (!text || socket.readyState !== WebSocket.OPEN) {
+          imeInput.focus();
+          return;
+        }
+
+        socket.send(text + '\n');
+        imeInput.value = '';
+        imeInput.focus();
+      }
+
       function setPressedState(button, pressed) {
         button.classList.toggle('is-pressed', pressed);
       }
@@ -423,6 +512,19 @@
 
           sendControlKey(keyData);
         });
+      });
+
+      imeInput.addEventListener('keydown', function (event) {
+        if (event.key !== 'Enter' || event.isComposing) {
+          return;
+        }
+
+        event.preventDefault();
+        sendImeInput();
+      });
+
+      imeSendButton.addEventListener('click', function () {
+        sendImeInput();
       });
 
       socket.addEventListener('open', function () {
