@@ -306,7 +306,7 @@
         }
 
         .mobile-control-row[data-row="special"] {
-          grid-template-columns: repeat(4, minmax(0, 1fr));
+          grid-template-columns: repeat(5, minmax(0, 1fr));
         }
 
         .mobile-control-row[data-row="arrows"] {
@@ -330,6 +330,13 @@
         .mobile-control-button.is-pressed {
           background: rgba(255, 255, 255, 0.12);
           border-color: rgba(125, 211, 252, 0.28);
+        }
+
+        .shift-toggle-btn.is-active {
+          background: rgba(125, 211, 252, 0.25);
+          border-color: rgba(125, 211, 252, 0.5);
+          color: #7dd3fc;
+          box-shadow: 0 0 10px rgba(125, 211, 252, 0.2);
         }
       }
     </style>
@@ -368,6 +375,7 @@
       </div>
       <div class="mobile-control-bar" aria-label="Mobile terminal controls">
         <div class="mobile-control-row" data-row="special">
+          <button class="mobile-control-button shift-toggle-btn" type="button" tabindex="-1" data-key="shift">⇧</button>
           <button class="mobile-control-button" type="button" tabindex="-1" data-key="enter">Enter</button>
           <button class="mobile-control-button" type="button" tabindex="-1" data-key="tab">Tab</button>
           <button class="mobile-control-button" type="button" tabindex="-1" data-key="esc">Esc</button>
@@ -395,6 +403,7 @@
       const imeInput = document.getElementById('ime-input');
       const imeSendButton = document.getElementById('ime-send-btn');
       const mobileControlButtons = document.querySelectorAll('.mobile-control-button');
+      const shiftToggleButton = document.querySelector('.shift-toggle-btn');
 
       const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
       const FONT_SIZE_MIN = 8;
@@ -405,6 +414,7 @@
       let reconnectTimer = null;
       let intentionalClose = false;
       let sessionId = null;
+      let shiftActive = false;
 
       function saveSessionId(id) {
         sessionId = id;
@@ -609,6 +619,10 @@
 
       term.onData(function (data) {
         if (socket && socket.readyState === WebSocket.OPEN) {
+          if (shiftActive && /^[ -~]$/.test(data)) {
+            socket.send(data.toUpperCase());
+            return;
+          }
           socket.send(data);
         }
       });
@@ -620,12 +634,41 @@
         changeFontSize(1);
       });
 
+      function applyShiftModifier(data) {
+        if (!shiftActive) {
+          return data;
+        }
+
+        switch (data) {
+          case '\x1b[A':
+            return '\x1b[1;2A';
+          case '\x1b[B':
+            return '\x1b[1;2B';
+          case '\x1b[C':
+            return '\x1b[1;2C';
+          case '\x1b[D':
+            return '\x1b[1;2D';
+          default:
+            if (/^[ -~]$/.test(data)) {
+              return data.toUpperCase();
+            }
+            return data;
+        }
+      }
+
+      function toggleShiftLock() {
+        shiftActive = !shiftActive;
+        if (shiftToggleButton) {
+          shiftToggleButton.classList.toggle('is-active', shiftActive);
+        }
+      }
+
       function sendControlKey(data) {
         if (!socket || socket.readyState !== WebSocket.OPEN) {
           return;
         }
 
-        socket.send(data);
+        socket.send(applyShiftModifier(data));
         if (document.activeElement) {
           document.activeElement.blur();
         }
@@ -638,7 +681,7 @@
           return;
         }
 
-        socket.send(text + '\n');
+        socket.send((shiftActive ? text.toUpperCase() : text) + '\n');
         imeInput.value = '';
         imeInput.focus();
       }
@@ -661,6 +704,7 @@
       };
 
       mobileControlButtons.forEach(function (button) {
+        const key = button.dataset.key;
         const keyData = mobileControlKeyMap[button.dataset.key] || '';
         let touched = false;
 
@@ -671,6 +715,10 @@
           }
           touched = true;
           setPressedState(button, true);
+          if (key === 'shift') {
+            toggleShiftLock();
+            return;
+          }
           sendControlKey(keyData);
         }, { passive: false });
 
@@ -693,6 +741,10 @@
 
           if (document.activeElement) {
             document.activeElement.blur();
+          }
+          if (key === 'shift') {
+            toggleShiftLock();
+            return;
           }
           sendControlKey(keyData);
         });
