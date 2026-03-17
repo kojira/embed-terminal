@@ -14,7 +14,7 @@ const server = http.createServer(app);
 const wss = new WebSocket.Server({ server, path: '/ws' });
 const sessions = new Map(); // sessionId -> { term, buffer, ws, exitPayload, destroyTimer }
 const MAX_BUFFER_LINES = 1000;
-const SESSION_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+const SESSION_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 
 const publicDir = path.join(__dirname, '..', 'public');
 

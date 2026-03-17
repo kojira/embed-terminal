@@ -364,7 +364,7 @@
 
       function saveSessionId(id) {
         sessionId = id;
-        document.cookie = 'pty_session=' + encodeURIComponent(id) + ';path=/;max-age=600;SameSite=Strict';
+        document.cookie = 'pty_session=' + encodeURIComponent(id) + ';path=/;max-age=1800;SameSite=Strict';
       }
 
       function loadSessionId() {
