@@ -89,6 +89,42 @@
         gap: 8px;
       }
 
+      .font-controls {
+        display: flex;
+        gap: 6px;
+        align-items: center;
+      }
+
+      .font-btn {
+        width: 28px;
+        height: 28px;
+        border-radius: 8px;
+        border: 1px solid var(--panel-border);
+        background: rgba(255, 255, 255, 0.05);
+        color: var(--text);
+        font-size: 16px;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: background 120ms ease, border-color 120ms ease;
+      }
+
+      .font-btn:hover {
+        background: rgba(255, 255, 255, 0.1);
+      }
+
+      .font-btn:active {
+        background: rgba(255, 255, 255, 0.15);
+      }
+
+      .font-size-label {
+        font-size: 11px;
+        color: var(--muted);
+        min-width: 32px;
+        text-align: center;
+      }
+
       .dots span {
         width: 11px;
         height: 11px;
@@ -303,6 +339,11 @@
       <div class="terminal-shell">
         <div class="terminal-header">
           <div class="dots"><span></span><span></span><span></span></div>
+          <div class="font-controls">
+            <button class="font-btn" id="font-decrease" type="button" title="Decrease font size">−</button>
+            <span class="font-size-label" id="font-size-label">14</span>
+            <button class="font-btn" id="font-increase" type="button" title="Increase font size">+</button>
+          </div>
           <div id="status">Connecting...</div>
         </div>
         <div id="terminal"></div>
@@ -356,6 +397,9 @@
       const mobileControlButtons = document.querySelectorAll('.mobile-control-button');
 
       const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+      const FONT_SIZE_MIN = 8;
+      const FONT_SIZE_MAX = 24;
+      const FONT_SIZE_KEY = 'cli-chat-font-size';
       let socket = null;
       let reconnectAttempts = 0;
       let reconnectTimer = null;
@@ -380,6 +424,11 @@
       sessionId = loadSessionId();
 
       function getTerminalFontSize() {
+        const saved = localStorage.getItem(FONT_SIZE_KEY);
+        if (saved) {
+          const size = parseInt(saved, 10);
+          if (size >= FONT_SIZE_MIN && size <= FONT_SIZE_MAX) return size;
+        }
         return window.innerWidth <= 768 ? 12 : 14;
       }
 
@@ -422,11 +471,27 @@
       window.requestAnimationFrame(function () {
         fitAddon.fit();
         sendResize();
+        updateFontSizeLabel();
       });
       term.focus();
       term.writeln('\x1b[1;36mCLI chat terminal\x1b[0m');
       term.writeln('\x1b[2mStarting interactive session...\x1b[0m');
       term.writeln('');
+
+      function updateFontSizeLabel() {
+        document.getElementById('font-size-label').textContent = term.options.fontSize;
+      }
+
+      function changeFontSize(delta) {
+        const current = term.options.fontSize || 14;
+        const next = Math.min(FONT_SIZE_MAX, Math.max(FONT_SIZE_MIN, current + delta));
+        if (next === current) return;
+        term.options.fontSize = next;
+        localStorage.setItem(FONT_SIZE_KEY, String(next));
+        fitAddon.fit();
+        sendResize();
+        updateFontSizeLabel();
+      }
 
       function sendResize() {
         if (!socket || socket.readyState !== WebSocket.OPEN) {
@@ -523,12 +588,15 @@
       }
 
       window.addEventListener('resize', function () {
-        const fontSize = getTerminalFontSize();
-        if (term.options.fontSize !== fontSize) {
-          term.options.fontSize = fontSize;
+        if (!localStorage.getItem(FONT_SIZE_KEY)) {
+          const fontSize = getTerminalFontSize();
+          if (term.options.fontSize !== fontSize) {
+            term.options.fontSize = fontSize;
+          }
         }
         fitAddon.fit();
         sendResize();
+        updateFontSizeLabel();
       });
 
       if (window.ResizeObserver) {
@@ -543,6 +611,13 @@
         if (socket && socket.readyState === WebSocket.OPEN) {
           socket.send(data);
         }
+      });
+
+      document.getElementById('font-decrease').addEventListener('click', function () {
+        changeFontSize(-1);
+      });
+      document.getElementById('font-increase').addEventListener('click', function () {
+        changeFontSize(1);
       });
 
       function sendControlKey(data) {
