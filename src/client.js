@@ -53,8 +53,90 @@
     brightCyan: '#a5f3fc',
     brightWhite: '#f0f6fc',
   };
+  const THEME_PRESETS = {
+    default: DEFAULT_THEME,
+    dark: DEFAULT_THEME,
+    light: {
+      background: '#ffffff',
+      foreground: '#24292f',
+      cursor: '#0969da',
+      selectionBackground: 'rgba(9, 105, 218, 0.2)',
+      black: '#24292f',
+      red: '#cf222e',
+      green: '#1a7f37',
+      yellow: '#9a6700',
+      blue: '#0969da',
+      magenta: '#8250df',
+      cyan: '#1b7c83',
+      white: '#6e7781',
+      brightBlack: '#57606a',
+      brightRed: '#a40e26',
+      brightGreen: '#116329',
+      brightYellow: '#7d4e00',
+      brightBlue: '#0550ae',
+      brightMagenta: '#6639ba',
+      brightCyan: '#0a6068',
+      brightWhite: '#24292f',
+    },
+    monokai: {
+      background: '#272822',
+      foreground: '#f8f8f2',
+      cursor: '#f8f8f0',
+      selectionBackground: 'rgba(73, 72, 62, 0.6)',
+      black: '#272822',
+      red: '#f92672',
+      green: '#a6e22e',
+      yellow: '#f4bf75',
+      blue: '#66d9ef',
+      magenta: '#ae81ff',
+      cyan: '#a1efe4',
+      white: '#f8f8f2',
+      brightBlack: '#75715e',
+      brightRed: '#f92672',
+      brightGreen: '#a6e22e',
+      brightYellow: '#f4bf75',
+      brightBlue: '#66d9ef',
+      brightMagenta: '#ae81ff',
+      brightCyan: '#a1efe4',
+      brightWhite: '#f9f8f5',
+    },
+    dracula: {
+      background: '#282a36',
+      foreground: '#f8f8f2',
+      cursor: '#f8f8f2',
+      selectionBackground: 'rgba(68, 71, 90, 0.6)',
+      black: '#21222c',
+      red: '#ff5555',
+      green: '#50fa7b',
+      yellow: '#f1fa8c',
+      blue: '#bd93f9',
+      magenta: '#ff79c6',
+      cyan: '#8be9fd',
+      white: '#f8f8f2',
+      brightBlack: '#6272a4',
+      brightRed: '#ff6e6e',
+      brightGreen: '#69ff94',
+      brightYellow: '#ffffa5',
+      brightBlue: '#d6acff',
+      brightMagenta: '#ff92df',
+      brightCyan: '#a4ffff',
+      brightWhite: '#ffffff',
+    },
+  };
 
   let assetsPromise = null;
+
+  function resolveTheme(theme) {
+    if (theme && typeof theme === 'object') {
+      return theme;
+    }
+
+    if (typeof theme === 'string') {
+      return THEME_PRESETS[theme.toLowerCase()] || DEFAULT_THEME;
+    }
+
+    return DEFAULT_THEME;
+  }
 
   function loadStylesheet(href) {
     if (!global.document) {
@@ -168,7 +250,9 @@
       wsUrl: options.wsUrl || getDefaultWsUrl(),
       fontSize: options.fontSize || 14,
       fontFamily: options.fontFamily || '"JetBrains Mono", monospace',
-      theme: options.theme || DEFAULT_THEME,
+      theme: resolveTheme(options.theme),
+      header: options.header,
+      controls: options.controls,
       onConnect: options.onConnect || null,
       onDisconnect: options.onDisconnect || null,
       onExit: options.onExit || null,

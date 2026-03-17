@@ -1,10 +1,9 @@
 const crypto = require('crypto');
-const { spawnSync } = require('child_process');
 const express = require('express');
 const http = require('http');
 const path = require('path');
+const serverDeps = require('./server-deps');
 const WebSocket = require('ws');
-const pty = require('node-pty');
 
 const MAX_BUFFER_LINES = 1000;
 const SESSION_TIMEOUT_MS = 5 * 60 * 1000;
@@ -13,7 +12,7 @@ const publicDir = path.join(__dirname, '..', 'public');
 const clientFile = path.join(__dirname, 'client.js');
 
 function commandExists(command) {
-  const result = spawnSync('which', [command], { stdio: 'ignore' });
+  const result = serverDeps.spawnSync('which', [command], { stdio: 'ignore' });
   return result.status === 0;
 }
 
@@ -28,7 +27,7 @@ function createPty(command, options = {}) {
     args.push('--resume');
   }
 
-  return pty.spawn(command, args, {
+  return serverDeps.spawnPty(command, args, {
     name: 'xterm-256color',
     cols: 80,
     rows: 24,
@@ -252,6 +251,14 @@ function createChatServer(httpServer, options = {}) {
   function close(callback) {
     for (const sessionId of sessions.keys()) {
       destroySession(sessionId);
+    }
+
+    for (const client of wss.clients) {
+      try {
+        client.terminate();
+      } catch (_error) {
+        // Ignore termination failures during shutdown.
+      }
     }
 
     if (typeof callback === 'function') {
