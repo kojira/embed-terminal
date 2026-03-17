@@ -1,6 +1,7 @@
 const express = require('express');
 const http = require('http');
 const path = require('path');
+const { spawnSync } = require('child_process');
 const WebSocket = require('ws');
 const pty = require('node-pty');
 
@@ -20,6 +21,11 @@ function getShellCommand() {
   return provider === 'codex' ? 'codex' : 'claude';
 }
 
+function commandExists(command) {
+  const result = spawnSync('which', [command], { stdio: 'ignore' });
+  return result.status === 0;
+}
+
 function createPty() {
   return pty.spawn(getShellCommand(), [], {
     name: 'xterm-256color',
@@ -30,14 +36,45 @@ function createPty() {
   });
 }
 
-wss.on('connection', (ws) => {
-  const term = createPty();
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught exception:', error);
+});
 
+process.on('unhandledRejection', (reason) => {
+  console.error('Unhandled rejection:', reason);
+});
+
+wss.on('connection', (ws) => {
   const sendText = (data) => {
     if (ws.readyState === WebSocket.OPEN) {
       ws.send(data);
     }
   };
+
+  const command = getShellCommand();
+  if (!commandExists(command)) {
+    sendText(`\r\nError: Command "${command}" not found. Please install it first.\r\n`);
+    ws.close();
+    return;
+  }
+
+  let term;
+  try {
+    term = createPty();
+  } catch (error) {
+    console.error(`Failed to start "${command}":`, error);
+    sendText(`\r\nError: Failed to start "${command}". Make sure the command is installed and accessible.\r\n`);
+    ws.close();
+    return;
+  }
+
+  term.on('error', (error) => {
+    console.error(`PTY error for "${command}":`, error);
+    sendText(`\r\nError: Failed to start "${command}". Make sure the command is installed and accessible.\r\n`);
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.close();
+    }
+  });
 
   term.onData((data) => {
     sendText(data);
@@ -68,15 +105,21 @@ wss.on('connection', (ws) => {
       // Non-JSON messages are terminal input and should be passed through.
     }
 
-    term.write(input);
+    if (term) {
+      term.write(input);
+    }
   });
 
   ws.on('close', () => {
-    term.kill();
+    if (term) {
+      term.kill();
+    }
   });
 
   ws.on('error', () => {
-    term.kill();
+    if (term) {
+      term.kill();
+    }
   });
 });
 
