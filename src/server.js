@@ -1,14 +1,16 @@
-const express = require('express');
 const crypto = require('crypto');
+const { spawnSync } = require('child_process');
+const express = require('express');
 const http = require('http');
 const path = require('path');
-const { spawnSync } = require('child_process');
 const WebSocket = require('ws');
 const pty = require('node-pty');
 
 const MAX_BUFFER_LINES = 1000;
-const SESSION_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+const SESSION_TIMEOUT_MS = 5 * 60 * 1000;
+const DEFAULT_WS_PATH = '/ws';
 const publicDir = path.join(__dirname, '..', 'public');
+const clientFile = path.join(__dirname, 'client.js');
 
 function commandExists(command) {
   const result = spawnSync('which', [command], { stdio: 'ignore' });
@@ -16,37 +18,92 @@ function commandExists(command) {
 }
 
 function getShellCommand(provider) {
-  const normalizedProvider = (provider || process.env.AI_PROVIDER || 'claude').toLowerCase();
+  const normalizedProvider = String(provider || process.env.AI_PROVIDER || 'claude').toLowerCase();
   return normalizedProvider === 'codex' ? 'codex' : 'claude';
 }
 
-function createPty(command, options) {
+function createPty(command, options = {}) {
   const args = [];
-  if (options && options.resume && command === 'claude') {
+  if (options.resume && command === 'claude') {
     args.push('--resume');
   }
+
   return pty.spawn(command, args, {
     name: 'xterm-256color',
     cols: 80,
     rows: 24,
-    cwd: process.cwd(),
-    env: process.env,
+    cwd: options.cwd || process.cwd(),
+    env: options.env || process.env,
   });
 }
 
-function startServer(config = {}) {
-  const host = config.host || '0.0.0.0';
-  const port = Number(config.port) || 3456;
-  const provider = config.provider || process.env.AI_PROVIDER || 'claude';
+function createChatServer(httpServer, options = {}) {
+  if (!httpServer || typeof httpServer.on !== 'function') {
+    throw new TypeError('createChatServer requires an http.Server instance');
+  }
 
-  const app = express();
-  const server = http.createServer(app);
-  const wss = new WebSocket.Server({ server, path: '/ws' });
-  const sessions = new Map(); // sessionId -> { term, buffer, ws, exitPayload, destroyTimer }
+  const provider = options.provider || process.env.AI_PROVIDER || 'claude';
+  const wsPath = options.path || DEFAULT_WS_PATH;
+  const sessions = new Map();
+  const wss = new WebSocket.Server({ server: httpServer, path: wsPath });
 
-  app.use(express.static(publicDir));
+  function destroySession(sessionId) {
+    const session = sessions.get(sessionId);
+    if (!session) {
+      return;
+    }
 
-  function createSession(sessionId, options) {
+    if (session.destroyTimer) {
+      clearTimeout(session.destroyTimer);
+      session.destroyTimer = null;
+    }
+
+    if (session.ws) {
+      try {
+        session.ws.close();
+      } catch (_error) {
+        // Ignore close failures while tearing down.
+      }
+      session.ws = null;
+    }
+
+    if (session.term) {
+      try {
+        session.term.kill();
+      } catch (_error) {
+        // PTY may already be dead.
+      }
+    }
+
+    sessions.delete(sessionId);
+  }
+
+  function scheduleDestroy(sessionId) {
+    const session = sessions.get(sessionId);
+    if (!session) {
+      return;
+    }
+
+    if (session.destroyTimer) {
+      clearTimeout(session.destroyTimer);
+    }
+
+    session.destroyTimer = setTimeout(() => {
+      destroySession(sessionId);
+    }, SESSION_TIMEOUT_MS);
+  }
+
+  function cancelDestroy(sessionId) {
+    const session = sessions.get(sessionId);
+    if (!session || !session.destroyTimer) {
+      return;
+    }
+
+    clearTimeout(session.destroyTimer);
+    session.destroyTimer = null;
+  }
+
+  function createSession(sessionId, sessionOptions = {}) {
     const command = getShellCommand(provider);
     if (!commandExists(command)) {
       return { error: `Command "${command}" not found. Please install it first.` };
@@ -54,10 +111,16 @@ function startServer(config = {}) {
 
     let term;
     try {
-      term = createPty(command, options);
+      term = createPty(command, {
+        resume: sessionOptions.resume,
+        cwd: options.cwd,
+        env: options.env,
+      });
     } catch (error) {
       console.error(`Failed to start "${command}":`, error);
-      return { error: `Failed to start "${command}". Make sure the command is installed and accessible.` };
+      return {
+        error: `Failed to start "${command}". Make sure the command is installed and accessible.`,
+      };
     }
 
     const session = {
@@ -77,6 +140,7 @@ function startServer(config = {}) {
       while (session.buffer.length > MAX_BUFFER_LINES) {
         session.buffer.shift();
       }
+
       if (session.ws && session.ws.readyState === WebSocket.OPEN) {
         session.ws.send(data);
       }
@@ -95,50 +159,16 @@ function startServer(config = {}) {
     return { session };
   }
 
-  function scheduleDestroy(sessionId) {
-    const session = sessions.get(sessionId);
-    if (!session) return;
-    if (session.destroyTimer) clearTimeout(session.destroyTimer);
-    session.destroyTimer = setTimeout(() => {
-      if (session.term) {
-        try {
-          session.term.kill();
-        } catch (e) {
-          // already dead
-        }
-      }
-      sessions.delete(sessionId);
-      console.log(`Session ${sessionId} destroyed after timeout`);
-    }, SESSION_TIMEOUT_MS);
-  }
-
-  function cancelDestroy(sessionId) {
-    const session = sessions.get(sessionId);
-    if (session && session.destroyTimer) {
-      clearTimeout(session.destroyTimer);
-      session.destroyTimer = null;
-    }
-  }
-
-  process.on('uncaughtException', (error) => {
-    console.error('Uncaught exception:', error);
-  });
-
-  process.on('unhandledRejection', (reason) => {
-    console.error('Unhandled rejection:', reason);
-  });
-
   wss.on('connection', (ws, req) => {
-    const url = new URL(req.url, `http://${req.headers.host}`);
+    const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
     let sessionId = url.searchParams.get('sessionId');
+    let session;
 
-    const sendText = (data) => {
+    function sendText(data) {
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(data);
       }
-    };
-
-    let session;
+    }
 
     if (sessionId && sessions.has(sessionId)) {
       session = sessions.get(sessionId);
@@ -147,10 +177,12 @@ function startServer(config = {}) {
       if (session.ws) {
         try {
           session.ws.close();
-        } catch (e) {}
+        } catch (_error) {
+          // Ignore replacement close failures.
+        }
       }
-      session.ws = ws;
 
+      session.ws = ws;
       sendText(JSON.stringify({ type: 'session', sessionId }));
 
       if (session.exitPayload) {
@@ -165,18 +197,18 @@ function startServer(config = {}) {
       }
       sendText(JSON.stringify({ type: 'replay-end' }));
     } else {
-      // If client sent a sessionId that no longer exists, it is an expired session - use --resume
-      const isExpired = !!sessionId;
+      const isExpired = Boolean(sessionId);
       sessionId = crypto.randomUUID();
+
       const result = createSession(sessionId, { resume: isExpired });
       if (result.error) {
-        sendText('\r\n' + result.error + '\r\n');
+        sendText(`\r\n${result.error}\r\n`);
         ws.close();
         return;
       }
+
       session = result.session;
       session.ws = ws;
-
       sendText(JSON.stringify({ type: 'session', sessionId, resumed: isExpired }));
     }
 
@@ -193,8 +225,8 @@ function startServer(config = {}) {
           }
           return;
         }
-      } catch (e) {
-        // Non-JSON = terminal input
+      } catch (_error) {
+        // Plain text terminal input.
       }
 
       if (session.term) {
@@ -217,18 +249,54 @@ function startServer(config = {}) {
     });
   });
 
+  function close(callback) {
+    for (const sessionId of sessions.keys()) {
+      destroySession(sessionId);
+    }
+
+    if (typeof callback === 'function') {
+      wss.close(callback);
+      return;
+    }
+
+    return new Promise((resolve, reject) => {
+      wss.close((error) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolve();
+      });
+    });
+  }
+
+  return { wss, sessions, close };
+}
+
+function startServer(config = {}) {
+  const host = config.host || '0.0.0.0';
+  const port = Number(config.port) || 3456;
+  const wsPath = config.path || DEFAULT_WS_PATH;
+  const app = express();
+  const server = http.createServer(app);
+  const chat = createChatServer(server, config);
+
+  app.get('/client.js', (_req, res) => {
+    res.sendFile(clientFile);
+  });
+  app.use(express.static(publicDir, { index: false }));
   app.use((_req, res) => {
     res.sendFile(path.join(publicDir, 'index.html'));
   });
 
   server.listen(port, host, () => {
-    console.log(`Server listening on http://${host}:${port}`);
+    console.log(`Server listening on http://${host}:${port} (ws path: ${wsPath})`);
   });
 
-  return { app, server, wss };
+  return { app, server, ...chat };
 }
 
-module.exports = { startServer };
+module.exports = { createChatServer, startServer };
 
 if (require.main === module) {
   startServer();

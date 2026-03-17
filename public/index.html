@@ -10,10 +10,6 @@
       href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap"
       rel="stylesheet"
     />
-    <link
-      rel="stylesheet"
-      href="https://unpkg.com/xterm@5.3.0/css/xterm.css"
-    />
     <style>
       :root {
         color-scheme: dark;
@@ -422,9 +418,7 @@
       </div>
     </div>
 
-    <script src="https://unpkg.com/xterm@5.3.0/lib/xterm.js"></script>
-    <script src="https://unpkg.com/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
-    <script src="https://unpkg.com/xterm-addon-web-links@0.9.0/lib/xterm-addon-web-links.js"></script>
+    <script src="/client.js"></script>
     <script>
       const terminalElement = document.getElementById('terminal');
       const overlay = document.getElementById('overlay');
@@ -436,34 +430,11 @@
       const shiftToggleButton = document.querySelector('.shift-toggle-btn');
       const ctrlToggleButton = document.querySelector('.ctrl-toggle-btn');
 
-      const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
       const FONT_SIZE_MIN = 8;
       const FONT_SIZE_MAX = 24;
       const FONT_SIZE_KEY = 'cli-chat-font-size';
-      let socket = null;
-      let reconnectAttempts = 0;
-      let reconnectTimer = null;
-      let intentionalClose = false;
-      let sessionId = null;
       let shiftActive = false;
       let ctrlActive = false;
-
-      function saveSessionId(id) {
-        sessionId = id;
-        document.cookie = 'pty_session=' + encodeURIComponent(id) + ';path=/;max-age=600;SameSite=Strict';
-      }
-
-      function loadSessionId() {
-        const match = document.cookie.match(/(?:^|;\s*)pty_session=([^;]*)/);
-        return match ? decodeURIComponent(match[1]) : null;
-      }
-
-      function clearSessionId() {
-        sessionId = null;
-        document.cookie = 'pty_session=;path=/;max-age=0';
-      }
-
-      sessionId = loadSessionId();
 
       function getTerminalFontSize() {
         const saved = localStorage.getItem(FONT_SIZE_KEY);
@@ -474,192 +445,65 @@
         return window.innerWidth <= 768 ? 12 : 14;
       }
 
-      const term = new Terminal({
-        convertEol: true,
-        cursorBlink: true,
-        fontFamily: '"JetBrains Mono", monospace',
+      const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+      const chatTerminal = new window.ChatTerminal(terminalElement, {
+        wsUrl: protocol + '://' + window.location.host + '/ws',
         fontSize: getTerminalFontSize(),
-        lineHeight: 1.35,
-        theme: {
-          background: '#141625',
-          foreground: '#e6edf7',
-          cursor: '#7dd3fc',
-          selectionBackground: 'rgba(125, 211, 252, 0.25)',
-          black: '#141625',
-          red: '#ff7b72',
-          green: '#7ee787',
-          yellow: '#f2cc60',
-          blue: '#79c0ff',
-          magenta: '#d2a8ff',
-          cyan: '#7dd3fc',
-          white: '#e6edf7',
-          brightBlack: '#6e7681',
-          brightRed: '#ffa198',
-          brightGreen: '#56d364',
-          brightYellow: '#e3b341',
-          brightBlue: '#a5d6ff',
-          brightMagenta: '#e2b8ff',
-          brightCyan: '#a5f3fc',
-          brightWhite: '#f0f6fc'
+        fontFamily: '"JetBrains Mono", monospace',
+        onConnect: function () {
+          statusElement.textContent = 'Connected';
+          overlay.classList.remove('visible');
+        },
+        onDisconnect: function () {
+          statusElement.textContent = 'Disconnected';
+        },
+        onExit: function (event) {
+          statusElement.textContent = 'Disconnected';
+          overlay.classList.add('visible');
+          if (chatTerminal.terminal) {
+            chatTerminal.terminal.writeln('');
+            chatTerminal.terminal.writeln('\x1b[33mCLI exited (' + event.code + ').\x1b[0m');
+          }
         }
       });
 
-      const fitAddon = new FitAddon.FitAddon();
-      const webLinksAddon = new WebLinksAddon.WebLinksAddon();
-
-      term.loadAddon(fitAddon);
-      term.loadAddon(webLinksAddon);
-      term.open(terminalElement);
-      window.requestAnimationFrame(function () {
-        fitAddon.fit();
-        sendResize();
-        updateFontSizeLabel();
-      });
-      term.focus();
-      term.writeln('\x1b[1;36mCLI chat terminal\x1b[0m');
-      term.writeln('\x1b[2mStarting interactive session...\x1b[0m');
-      term.writeln('');
-
       function updateFontSizeLabel() {
-        document.getElementById('font-size-label').textContent = term.options.fontSize;
+        const currentFontSize = chatTerminal.terminal
+          ? chatTerminal.terminal.options.fontSize
+          : getTerminalFontSize();
+        document.getElementById('font-size-label').textContent = currentFontSize;
       }
 
       function changeFontSize(delta) {
-        const current = term.options.fontSize || 14;
+        if (!chatTerminal.terminal) return;
+
+        const current = chatTerminal.terminal.options.fontSize || 14;
         const next = Math.min(FONT_SIZE_MAX, Math.max(FONT_SIZE_MIN, current + delta));
         if (next === current) return;
-        term.options.fontSize = next;
         localStorage.setItem(FONT_SIZE_KEY, String(next));
-        fitAddon.fit();
-        sendResize();
+        chatTerminal.setFontSize(next);
         updateFontSizeLabel();
       }
 
-      function sendResize() {
-        if (!socket || socket.readyState !== WebSocket.OPEN) {
-          return;
-        }
-
-        socket.send(
-          JSON.stringify({
-            type: 'resize',
-            cols: term.cols,
-            rows: term.rows
-          })
-        );
-      }
-
-      function scheduleReconnect() {
-        if (reconnectTimer) {
-          return;
-        }
-
-        const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000);
-        term.writeln('\r\n\x1b[33mReconnecting in ' + (delay / 1000) + 's...\x1b[0m');
-        statusElement.textContent = 'Reconnecting...';
-        reconnectTimer = setTimeout(function () {
-          reconnectTimer = null;
-          reconnectAttempts++;
-          connect();
-        }, delay);
-      }
-
-      function connect() {
-        let replaying = false;
-        socket = new WebSocket(
-          protocol + '://' + window.location.host + '/ws' + (sessionId ? '?sessionId=' + encodeURIComponent(sessionId) : '')
-        );
-
-        socket.addEventListener('open', function () {
-          statusElement.textContent = 'Connected';
-          reconnectAttempts = 0;
-          fitAddon.fit();
-          sendResize();
-        });
-
-        socket.addEventListener('message', function (event) {
-          if (typeof event.data !== 'string') {
-            return;
-          }
-
-          try {
-            const payload = JSON.parse(event.data);
-            if (payload && payload.type === 'session') {
-              saveSessionId(payload.sessionId);
-              if (payload.resumed) {
-                term.writeln('\r\n\x1b[1;36mSession restored with --resume\x1b[0m\r\n');
-              }
-              return;
-            }
-            if (payload && payload.type === 'replay-start') {
-              replaying = true;
-              term.clear();
-              return;
-            }
-            if (payload && payload.type === 'replay-end') {
-              replaying = false;
-              return;
-            }
-            if (payload && payload.type === 'exit') {
-              intentionalClose = true;
-              clearSessionId();
-              statusElement.textContent = 'Disconnected';
-              term.writeln('');
-              term.writeln('\x1b[33mCLI exited (' + payload.code + ').\x1b[0m');
-              overlay.classList.add('visible');
-              return;
-            }
-          } catch (error) {
-            // Terminal data is plain text, not JSON.
-          }
-
-          term.write(event.data);
-        });
-
-        socket.addEventListener('close', function () {
-          statusElement.textContent = 'Disconnected';
-          if (!intentionalClose) {
-            scheduleReconnect();
-          }
-        });
-
-        socket.addEventListener('error', function () {
-          statusElement.textContent = 'Connection error';
-          term.writeln('\r\n\x1b[31mWebSocket connection error.\x1b[0m');
-        });
-      }
-
-      window.addEventListener('resize', function () {
-        if (!localStorage.getItem(FONT_SIZE_KEY)) {
-          const fontSize = getTerminalFontSize();
-          if (term.options.fontSize !== fontSize) {
-            term.options.fontSize = fontSize;
-          }
-        }
-        fitAddon.fit();
-        sendResize();
+      chatTerminal.ready.then(function () {
+        if (!chatTerminal.terminal) return;
+        chatTerminal.terminal.writeln('\x1b[1;36mCLI chat terminal\x1b[0m');
+        chatTerminal.terminal.writeln('\x1b[2mStarting interactive session...\x1b[0m');
+        chatTerminal.terminal.writeln('');
+        chatTerminal.terminal.focus();
         updateFontSizeLabel();
       });
 
-      if (window.ResizeObserver) {
-        const observer = new ResizeObserver(function () {
-          fitAddon.fit();
-          sendResize();
-        });
-        observer.observe(terminalElement);
-      }
+      window.addEventListener('resize', function () {
+        if (!chatTerminal.terminal) return;
 
-      term.onData(function (data) {
-        if (socket && socket.readyState === WebSocket.OPEN) {
-          if (shiftActive && /^[ -~]$/.test(data)) {
-            data = data.toUpperCase();
+        if (!localStorage.getItem(FONT_SIZE_KEY)) {
+          const fontSize = getTerminalFontSize();
+          if (chatTerminal.terminal.options.fontSize !== fontSize) {
+            chatTerminal.setFontSize(fontSize);
           }
-          if (ctrlActive && /^[A-Za-z]$/.test(data)) {
-            socket.send(applyCtrlModifier(data));
-            return;
-          }
-          socket.send(data);
         }
+        updateFontSizeLabel();
       });
 
       document.getElementById('font-decrease').addEventListener('click', function () {
@@ -733,28 +577,31 @@
 
       function sendControlKey(data) {
         if (data === 'pgup') {
-          term.scrollPages(-1);
+          if (chatTerminal.terminal) {
+            chatTerminal.terminal.scrollPages(-1);
+          }
           return;
         }
 
         if (data === 'pgdn') {
-          term.scrollPages(1);
+          if (chatTerminal.terminal) {
+            chatTerminal.terminal.scrollPages(1);
+          }
           return;
         }
 
-        if (!socket || socket.readyState !== WebSocket.OPEN) {
-          return;
-        }
-
-        socket.send(applyCtrlModifier(applyShiftModifier(data)));
+        chatTerminal.sendInput(applyCtrlModifier(applyShiftModifier(data)));
         if (document.activeElement) {
           document.activeElement.blur();
+        }
+        if (chatTerminal.terminal) {
+          chatTerminal.terminal.focus();
         }
       }
 
       function sendImeInput() {
         const text = imeInput.value;
-        if (!text || !socket || socket.readyState !== WebSocket.OPEN) {
+        if (!text) {
           imeInput.focus();
           return;
         }
@@ -766,7 +613,7 @@
           }).join('');
         }
 
-        socket.send(output + '\n');
+        chatTerminal.sendInput(output + '\n');
         imeInput.value = '';
         imeInput.focus();
       }
@@ -858,31 +705,28 @@
         sendImeInput();
       });
 
+      chatTerminal.setInputTransformer(function (data) {
+        if (shiftActive && /^[ -~]$/.test(data)) {
+          data = data.toUpperCase();
+        }
+
+        if (ctrlActive && /^[A-Za-z]$/.test(data)) {
+          return applyCtrlModifier(data);
+        }
+
+        return data;
+      });
+
       document.addEventListener('visibilitychange', function () {
-        if (
-          document.visibilityState === 'visible' &&
-          socket &&
-          socket.readyState !== WebSocket.OPEN &&
-          socket.readyState !== WebSocket.CONNECTING
-        ) {
-          if (reconnectTimer) {
-            clearTimeout(reconnectTimer);
-            reconnectTimer = null;
-          }
-          reconnectAttempts = 0;
-          term.writeln('\r\n\x1b[1;36mReconnecting...\x1b[0m');
+        if (document.visibilityState === 'visible') {
           statusElement.textContent = 'Reconnecting...';
-          connect();
+          chatTerminal.connect();
         }
       });
 
       restartButton.addEventListener('click', function () {
-        intentionalClose = true;
-        clearSessionId();
         window.location.reload();
       });
-
-      connect();
     </script>
   </body>
 </html>
