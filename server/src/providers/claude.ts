@@ -24,6 +24,16 @@ function extractAssistantText(payload: unknown): string {
     .join("") ?? "";
 }
 
+type ClaudeContentItem = {
+  type?: string;
+  text?: string;
+  name?: string;
+  input?: unknown;
+  content?: unknown;
+  result?: unknown;
+  tool_result?: unknown;
+};
+
 function formatToolInput(input: unknown): string {
   if (input == null) {
     return "";
@@ -40,42 +50,26 @@ function formatToolInput(input: unknown): string {
   }
 }
 
-function extractToolUseText(payload: unknown): string {
-  if (!payload || typeof payload !== "object") {
+function extractToolUseText(item: ClaudeContentItem): string {
+  if (!item || typeof item !== "object") {
     return "";
   }
 
-  const record = payload as {
-    tool?: {
-      name?: string;
-      input?: unknown;
-    };
-    name?: string;
-    input?: unknown;
-  };
-
   const toolName =
-    (typeof record.tool?.name === "string" && record.tool.name) ||
-    (typeof record.name === "string" && record.name) ||
+    (typeof item.name === "string" && item.name) ||
     "Unknown";
-  const input = record.tool?.input ?? record.input;
+  const input = item.input;
   const formattedInput = formatToolInput(input);
 
   return `\n\n🔧 Using tool: ${toolName}\n${formattedInput ? `${formattedInput}\n` : ""}`;
 }
 
-function extractToolResultText(payload: unknown): string {
-  if (!payload || typeof payload !== "object") {
+function extractToolResultText(item: ClaudeContentItem): string {
+  if (!item || typeof item !== "object") {
     return "";
   }
 
-  const record = payload as {
-    content?: unknown;
-    result?: unknown;
-    tool_result?: unknown;
-  };
-
-  const content = record.content ?? record.result ?? record.tool_result;
+  const content = item.content ?? item.result ?? item.tool_result;
   const formattedContent = formatToolInput(content);
 
   return formattedContent ? `\n📋 Tool result: ${formattedContent}\n\n` : "";
@@ -133,6 +127,9 @@ export class ClaudeProvider implements AIProvider {
             const parsed = JSON.parse(trimmed) as {
               type?: string;
               result?: string;
+              message?: {
+                content?: ClaudeContentItem[];
+              };
             };
 
             if (parsed.type === "assistant") {
@@ -141,19 +138,29 @@ export class ClaudeProvider implements AIProvider {
                 streamedText += text;
                 onChunk(text);
               }
-            }
 
-            if (parsed.type === "tool_use") {
-              const text = extractToolUseText(parsed);
-              if (text) {
-                onChunk(text);
+              for (const item of parsed.message?.content ?? []) {
+                if (item.type !== "tool_use") {
+                  continue;
+                }
+
+                const toolUseText = extractToolUseText(item);
+                if (toolUseText) {
+                  onChunk(toolUseText);
+                }
               }
             }
 
-            if (parsed.type === "tool_result") {
-              const text = extractToolResultText(parsed);
-              if (text) {
-                onChunk(text);
+            if (parsed.type === "user") {
+              for (const item of parsed.message?.content ?? []) {
+                if (item.type !== "tool_result") {
+                  continue;
+                }
+
+                const toolResultText = extractToolResultText(item);
+                if (toolResultText) {
+                  onChunk(toolResultText);
+                }
               }
             }
 
