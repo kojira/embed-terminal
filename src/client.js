@@ -277,6 +277,10 @@
     this.ready = this._init();
   }
 
+  ChatTerminal.getThemePresets = function () {
+    return Object.keys(THEME_PRESETS);
+  };
+
   ChatTerminal.prototype._init = function () {
     const self = this;
 
@@ -301,6 +305,7 @@
         lineHeight: 1.35,
         theme: self.options.theme,
       });
+      self._applyCSSVariables(self.options.theme);
 
       self.fitAddon = new FitAddonCtor();
       self.webLinksAddon = new WebLinksAddonCtor();
@@ -332,6 +337,37 @@
         self.resizeObserver.observe(self.container);
       }
     });
+  };
+
+  ChatTerminal.prototype._applyCSSVariables = function (theme) {
+    if (!theme || typeof theme !== 'object') {
+      return;
+    }
+
+    const styleTarget =
+      (this.container && this.container.parentElement) ||
+      (global.document && global.document.documentElement) ||
+      null;
+
+    if (!styleTarget || !styleTarget.style || typeof styleTarget.style.setProperty !== 'function') {
+      return;
+    }
+
+    if (theme.background) {
+      styleTarget.style.setProperty('--chat-terminal-bg', theme.background);
+    }
+
+    if (theme.foreground) {
+      styleTarget.style.setProperty('--chat-text', theme.foreground);
+    }
+
+    if (theme.cursor) {
+      styleTarget.style.setProperty('--chat-accent', theme.cursor);
+    }
+
+    if (theme.black) {
+      styleTarget.style.setProperty('--chat-bg', theme.black);
+    }
   };
 
   ChatTerminal.prototype._handleWindowResize = function () {
@@ -520,6 +556,16 @@
 
     this.terminal.options.fontSize = fontSize;
     this.fit();
+  };
+
+  ChatTerminal.prototype.setTheme = function (theme) {
+    const resolvedTheme = resolveTheme(theme);
+
+    this.options.theme = resolvedTheme;
+    if (this.terminal) {
+      this.terminal.options.theme = resolvedTheme;
+    }
+    this._applyCSSVariables(resolvedTheme);
   };
 
   ChatTerminal.prototype.setInputTransformer = function (transformer) {

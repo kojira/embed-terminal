@@ -204,4 +204,92 @@ describe('ChatTerminal', () => {
 
     terminal.dispose();
   });
+
+  it('setTheme changes terminal theme with string preset', async () => {
+    const { ChatTerminal } = loadClientModule();
+    const container = document.getElementById('terminal');
+    const terminal = new ChatTerminal(container, { theme: 'default' });
+
+    await terminal.ready;
+    terminal.setTheme('dracula');
+
+    expect(terminal.terminal.options.theme).toMatchObject({
+      background: '#282a36',
+    });
+
+    terminal.dispose();
+  });
+
+  it('setTheme changes terminal theme with custom object', async () => {
+    const { ChatTerminal } = loadClientModule();
+    const container = document.getElementById('terminal');
+    const terminal = new ChatTerminal(container);
+    const theme = { background: '#111', foreground: '#eee' };
+
+    await terminal.ready;
+    terminal.setTheme(theme);
+
+    expect(terminal.terminal.options.theme).toBe(theme);
+
+    terminal.dispose();
+  });
+
+  it('applies CSS variables to container parent', async () => {
+    const { ChatTerminal } = loadClientModule();
+    const container = document.getElementById('terminal');
+    const terminal = new ChatTerminal(container);
+
+    await terminal.ready;
+
+    expect(container.parentElement.style.getPropertyValue('--chat-terminal-bg')).toBe('#141625');
+
+    terminal.dispose();
+  });
+
+  it('getThemePresets returns available presets', () => {
+    const { ChatTerminal } = loadClientModule();
+
+    expect(ChatTerminal.getThemePresets()).toEqual(
+      expect.arrayContaining(['dark', 'light', 'monokai', 'dracula', 'default'])
+    );
+  });
+
+  it('setFontSize updates terminal font size', async () => {
+    const { ChatTerminal } = loadClientModule();
+    const container = document.getElementById('terminal');
+    const terminal = new ChatTerminal(container);
+
+    await terminal.ready;
+    terminal.setFontSize(20);
+
+    expect(terminal.terminal.options.fontSize).toBe(20);
+
+    terminal.dispose();
+  });
+
+  it('dispose cleans up resources', async () => {
+    const { ChatTerminal } = loadClientModule();
+    const container = document.getElementById('terminal');
+    const terminal = new ChatTerminal(container);
+
+    await terminal.ready;
+    terminal.dispose();
+
+    expect(terminal.terminal).toBeNull();
+    expect(terminal.disposed).toBe(true);
+  });
+
+  it('setInputTransformer sets custom transformer', async () => {
+    const { ChatTerminal } = loadClientModule();
+    const container = document.getElementById('terminal');
+    const terminal = new ChatTerminal(container);
+    const transformer = (value) => value.toUpperCase();
+
+    await terminal.ready;
+    terminal.setInputTransformer(transformer);
+
+    expect(terminal.inputTransformer).toBe(transformer);
+
+    terminal.dispose();
+  });
 });
