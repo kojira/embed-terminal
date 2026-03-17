@@ -330,7 +330,7 @@
         }
 
         .mobile-control-row[data-row="arrows"] {
-          grid-template-columns: repeat(6, minmax(0, 1fr));
+          grid-template-columns: repeat(8, minmax(0, 1fr));
         }
 
         .mobile-control-button {
@@ -410,10 +410,12 @@
           <button class="mobile-control-button" type="button" tabindex="-1" data-key="ctrl-c">Ctrl+C</button>
         </div>
         <div class="mobile-control-row" data-row="arrows">
+          <button class="mobile-control-button" type="button" tabindex="-1" data-key="pgup">PgUp</button>
           <button class="mobile-control-button" type="button" tabindex="-1" data-key="left">←</button>
           <button class="mobile-control-button" type="button" tabindex="-1" data-key="up">↑</button>
           <button class="mobile-control-button" type="button" tabindex="-1" data-key="down">↓</button>
           <button class="mobile-control-button" type="button" tabindex="-1" data-key="right">→</button>
+          <button class="mobile-control-button" type="button" tabindex="-1" data-key="pgdn">PgDn</button>
           <button class="mobile-control-button" type="button" tabindex="-1" data-key="y">Y</button>
           <button class="mobile-control-button" type="button" tabindex="-1" data-key="n">N</button>
         </div>
@@ -730,6 +732,16 @@
       }
 
       function sendControlKey(data) {
+        if (data === 'pgup') {
+          term.scrollPages(-1);
+          return;
+        }
+
+        if (data === 'pgdn') {
+          term.scrollPages(1);
+          return;
+        }
+
         if (!socket || socket.readyState !== WebSocket.OPEN) {
           return;
         }
@@ -768,10 +780,12 @@
         tab: '\t',
         esc: '\x1b',
         'ctrl-c': '\x03',
+        pgup: 'pgup',
         left: '\x1b[D',
         up: '\x1b[A',
         down: '\x1b[B',
         right: '\x1b[C',
+        pgdn: 'pgdn',
         y: 'y',
         n: 'n'
       };
