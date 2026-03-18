@@ -393,11 +393,21 @@
           box-shadow: 0 0 10px var(--chat-shift-active-shadow);
         }
 
+        .shift-toggle-btn.is-active.is-locked {
+          box-shadow: 0 0 16px var(--chat-shift-active-shadow), inset 0 0 0 1px var(--chat-shift-active-border);
+          font-weight: 700;
+        }
+
         .ctrl-toggle-btn.is-active {
           background: var(--chat-ctrl-active-bg);
           border-color: var(--chat-ctrl-active-border);
           color: var(--chat-ctrl-active-text);
           box-shadow: 0 0 10px var(--chat-ctrl-active-shadow);
+        }
+
+        .ctrl-toggle-btn.is-active.is-locked {
+          box-shadow: 0 0 16px var(--chat-ctrl-active-shadow), inset 0 0 0 1px var(--chat-ctrl-active-border);
+          font-weight: 700;
         }
       }
     </style>
@@ -420,7 +430,7 @@
             class="ime-input"
             id="ime-input"
             type="text"
-            placeholder="IME入力 / Type here..."
+            placeholder="Type here..."
             autocomplete="off"
             autocapitalize="off"
             spellcheck="false"
@@ -471,8 +481,8 @@
       const FONT_SIZE_MIN = 8;
       const FONT_SIZE_MAX = 24;
       const FONT_SIZE_KEY = 'cli-chat-font-size';
-      let shiftActive = false;
-      let ctrlActive = false;
+      let shiftState = { active: false, locked: false, lastTapTime: 0 };
+      let ctrlState = { active: false, locked: false, lastTapTime: 0 };
 
       function getTerminalFontSize() {
         const saved = localStorage.getItem(FONT_SIZE_KEY);
@@ -551,8 +561,45 @@
         changeFontSize(1);
       });
 
+      function updateModifierButton(button, state) {
+        if (!button) return;
+        button.classList.toggle('is-active', state.active);
+        button.classList.toggle('is-locked', state.locked);
+      }
+
+      function tapModifier(state, button) {
+        const now = Date.now();
+        if (state.active && state.locked) {
+          state.active = false;
+          state.locked = false;
+        } else if (state.active && !state.locked) {
+          state.active = false;
+        } else {
+          if (now - state.lastTapTime < 300) {
+            state.active = true;
+            state.locked = true;
+          } else {
+            state.active = true;
+            state.locked = false;
+          }
+        }
+        state.lastTapTime = now;
+        updateModifierButton(button, state);
+      }
+
+      function clearOneShotModifiers() {
+        if (shiftState.active && !shiftState.locked) {
+          shiftState.active = false;
+          updateModifierButton(shiftToggleButton, shiftState);
+        }
+        if (ctrlState.active && !ctrlState.locked) {
+          ctrlState.active = false;
+          updateModifierButton(ctrlToggleButton, ctrlState);
+        }
+      }
+
       function applyShiftModifier(data) {
-        if (!shiftActive) {
+        if (!shiftState.active) {
           return data;
         }
 
@@ -574,17 +621,11 @@
       }
 
       function toggleShiftLock() {
-        shiftActive = !shiftActive;
-        if (shiftToggleButton) {
-          shiftToggleButton.classList.toggle('is-active', shiftActive);
-        }
+        tapModifier(shiftState, shiftToggleButton);
       }
 
       function toggleCtrlLock() {
-        ctrlActive = !ctrlActive;
-        if (ctrlToggleButton) {
-          ctrlToggleButton.classList.toggle('is-active', ctrlActive);
-        }
+        tapModifier(ctrlState, ctrlToggleButton);
       }
 
       function toCtrlCharacter(data) {
@@ -592,7 +633,7 @@
       }
 
       function applyCtrlModifier(data) {
-        if (!ctrlActive) {
+        if (!ctrlState.active) {
           return data;
         }
 
@@ -629,6 +670,7 @@
         }
 
         chatTerminal.sendInput(applyCtrlModifier(applyShiftModifier(data)));
+        clearOneShotModifiers();
         if (document.activeElement) {
           document.activeElement.blur();
         }
@@ -644,14 +686,15 @@
           return;
         }
 
-        let output = shiftActive ? text.toUpperCase() : text;
-        if (ctrlActive) {
+        let output = shiftState.active ? text.toUpperCase() : text;
+        if (ctrlState.active) {
           output = output.split('').map(function (char) {
             return /^[A-Za-z]$/.test(char) ? toCtrlCharacter(char) : char;
           }).join('');
         }
 
         chatTerminal.sendInput(output + '\n');
+        clearOneShotModifiers();
         imeInput.value = '';
         imeInput.focus();
       }
@@ -744,11 +787,11 @@
       });
 
       chatTerminal.setInputTransformer(function (data) {
-        if (shiftActive && /^[ -~]$/.test(data)) {
+        if (shiftState.active && /^[ -~]$/.test(data)) {
           data = data.toUpperCase();
         }
 
-        if (ctrlActive && /^[A-Za-z]$/.test(data)) {
+        if (ctrlState.active && /^[A-Za-z]$/.test(data)) {
           return applyCtrlModifier(data);
         }
 
