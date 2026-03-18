@@ -2,7 +2,15 @@
 
 Embeddable web terminal server for any directory.
 
-![embed-terminal screenshot](docs/screenshot.jpg)
+## Screenshots
+
+### PC
+
+![PC version](docs/screenshot-pc.png)
+
+### Mobile
+
+![Mobile version](docs/screenshot-mobile.png)
 
 ## Features
 
