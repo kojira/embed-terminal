@@ -46,11 +46,20 @@ function removeClaudeSessionId(projectId) {
   saveSessionStore(store);
 }
 
+function isClaudeSessionResumable(sessionId, cwd) {
+  if (!sessionId || !cwd) return false;
+  const projectDir = path.join(os.homedir(), '.claude', 'projects', cwd.replace(/\//g, '-'));
+  const sessionFile = path.join(projectDir, `${sessionId}.jsonl`);
+  return fs.existsSync(sessionFile);
+}
+
 function detectClaudeSessionId(pid, projectId, preExistingFiles, cwd) {
   if (!pid || !projectId) return;
   const sessionsDir = path.join(os.homedir(), '.claude', 'sessions');
   const maxAttempts = 20;
   let attempts = 0;
+
+  console.log(`[detectSession] Start: pid=${pid}, projectId=${projectId}, preExistingFiles count=${preExistingFiles ? preExistingFiles.size : 'null'}, cwd=${cwd}`);
 
   const check = () => {
     attempts++;
@@ -59,17 +68,22 @@ function detectClaudeSessionId(pid, projectId, preExistingFiles, cwd) {
     const sessionFile = path.join(sessionsDir, `${pid}.json`);
     try {
       const data = JSON.parse(fs.readFileSync(sessionFile, 'utf-8'));
+      console.log(`[detectSession] PID check: sessionFile=${sessionFile}, sessionId=${data.sessionId || 'undefined'}`);
       if (data.sessionId) {
         setClaudeSessionId(projectId, data.sessionId);
+        console.log(`[detectSession] Found via PID file, attempt #${attempts}`);
         return;
       }
-    } catch {}
+    } catch (err) {
+      console.log(`[detectSession] PID file not found or unreadable: ${sessionFile}`);
+    }
 
     // Fallback: directory diff approach
     if (preExistingFiles) {
       try {
         const currentFiles = fs.readdirSync(sessionsDir);
         const newFiles = currentFiles.filter((f) => !preExistingFiles.has(f) && f.endsWith('.json'));
+        console.log(`[detectSession] Diff fallback: currentFiles count=${currentFiles.length}, newFiles=${JSON.stringify(newFiles)}`);
 
         let bestMatch = null;
         let bestStartedAt = null;
@@ -77,10 +91,12 @@ function detectClaudeSessionId(pid, projectId, preExistingFiles, cwd) {
         for (const file of newFiles) {
           try {
             const data = JSON.parse(fs.readFileSync(path.join(sessionsDir, file), 'utf-8'));
+            console.log(`[detectSession] Diff file: ${file}, sessionId=${data.sessionId || 'undefined'}, cwd=${data.cwd || 'undefined'}, cwdMatch=${cwd && data.cwd === cwd}`);
             if (!data.sessionId) continue;
 
             // Prefer matching cwd
             if (cwd && data.cwd === cwd) {
+              console.log(`[detectSession] Found via cwd match in ${file}, attempt #${attempts}`);
               setClaudeSessionId(projectId, data.sessionId);
               return;
             }
@@ -90,18 +106,26 @@ function detectClaudeSessionId(pid, projectId, preExistingFiles, cwd) {
               bestStartedAt = data.startedAt;
               bestMatch = data.sessionId;
             }
-          } catch {}
+          } catch (err) {
+            console.log(`[detectSession] Diff file error for ${file}: ${err.message}`);
+          }
         }
 
         if (bestMatch) {
+          console.log(`[detectSession] Best match selected: ${bestMatch}, attempt #${attempts}`);
           setClaudeSessionId(projectId, bestMatch);
           return;
         }
-      } catch {}
+      } catch (err) {
+        console.log(`[detectSession] Diff fallback error: ${err.message}`);
+      }
     }
 
     if (attempts < maxAttempts) {
+      console.log(`[detectSession] No match yet, attempt #${attempts}/${maxAttempts}, retrying in 500ms`);
       setTimeout(check, 500);
+    } else {
+      console.log(`[detectSession] Max attempts (${maxAttempts}) reached without finding session ID`);
     }
   };
   setTimeout(check, 1000);
@@ -144,6 +168,7 @@ function createChatServer(httpServer, options = {}) {
   const wsPath = options.path || DEFAULT_WS_PATH;
   const sessions = new Map();
   const wss = new WebSocket.Server({ server: httpServer, path: wsPath });
+  const effectiveCwd = options.cwd || process.cwd();
 
   function destroySession(sessionId) {
     const session = sessions.get(sessionId);
@@ -208,7 +233,17 @@ function createChatServer(httpServer, options = {}) {
     }
 
     const projectId = sessionOptions.projectId;
-    const claudeSessionId = projectId ? getClaudeSessionId(projectId) : null;
+    let claudeSessionId = projectId ? getClaudeSessionId(projectId) : null;
+
+    // Validate that the stored session actually has conversation data
+    if (claudeSessionId && effectiveCwd) {
+      const resumable = isClaudeSessionResumable(claudeSessionId, effectiveCwd);
+      console.log(`[detectSession] Validating resumability: sessionId=${claudeSessionId}, cwd=${effectiveCwd}, resumable=${resumable}`);
+      if (!resumable) {
+        claudeSessionId = null;
+        removeClaudeSessionId(projectId);
+      }
+    }
 
     // Snapshot existing session files before PTY spawn for directory-diff detection
     const sessionsDir = path.join(os.homedir(), '.claude', 'sessions');
@@ -224,7 +259,7 @@ function createChatServer(httpServer, options = {}) {
       term = createPty(command, {
         claudeSessionId: sessionOptions.claudeSessionId || claudeSessionId,
         appendSystemPrompt: sessionOptions.appendSystemPrompt,
-        cwd: options.cwd,
+        cwd: effectiveCwd,
         env: options.env,
       });
     } catch (error) {
@@ -318,8 +353,10 @@ function createChatServer(httpServer, options = {}) {
       scheduleDestroy(sessionId);
     });
 
-    if (term.pid && projectId) {
-      detectClaudeSessionId(term.pid, projectId, preExistingFiles, options.cwd);
+    if (term.pid && projectId && !claudeSessionId) {
+      detectClaudeSessionId(term.pid, projectId, preExistingFiles, effectiveCwd);
+    } else if (claudeSessionId) {
+      console.log("[detectSession] Skipping detection for resumed session: " + claudeSessionId);
     }
 
     sessions.set(sessionId, session);
@@ -430,8 +467,8 @@ function createChatServer(httpServer, options = {}) {
       const projectId = url.searchParams.get('projectId') || undefined;
 
       const startSession = (appendSystemPrompt) => {
-        const resumed = Boolean(projectId && getClaudeSessionId(projectId));
         const result = createSession(sessionId, { appendSystemPrompt, projectId });
+        const resumed = Boolean(projectId && getClaudeSessionId(projectId) && result.session && result.session._isResumeAttempt);
         if (result.error) {
           sendText(`\r\n${result.error}\r\n`);
           ws.close();
