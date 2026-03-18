@@ -222,50 +222,21 @@ function createChatServer(httpServer, options = {}) {
       }, 3000);
     }
 
-    function handleResumeFallback() {
-      if (resumeVerifyTimer) {
-        clearTimeout(resumeVerifyTimer);
-        resumeVerifyTimer = null;
-      }
-      if (projectId) {
-        removeClaudeSessionId(projectId);
-      }
-      try {
-        term.kill();
-      } catch {}
-      // Notify the client
-      const notice = '\r\n⚠️ セッション復帰に失敗しました。新規セッションを開始します...\r\n';
-      if (session.ws && session.ws.readyState === WebSocket.OPEN) {
-        session.ws.send(notice);
-      }
-      // Create a new session without claudeSessionId
-      const result = createSession(sessionId, {
-        appendSystemPrompt: sessionOptions.appendSystemPrompt,
-        projectId,
-      });
-      if (!result.error) {
-        const newSession = result.session;
-        newSession.ws = session.ws;
-        sessions.set(sessionId, newSession);
-        // Send buffered data to ws
-        if (newSession.ws && newSession.ws.readyState === WebSocket.OPEN) {
-          for (const chunk of newSession.buffer) {
-            newSession.ws.send(chunk);
-          }
-        }
-      }
-    }
-
     term.onData((data) => {
-      // Detect resume failure and fallback to new session
+      // Detect resume failure and clear invalid session ID
       if (session._isResumeAttempt && !session._resumeVerified) {
         const text = typeof data === 'string' ? data : data.toString();
         session._earlyOutput += text;
         if (resumeErrorPatterns.some((pattern) => session._earlyOutput.includes(pattern))) {
-          handleResumeFallback();
-          return;
-        }
-        if (session._earlyOutput.length >= 2000) {
+          if (projectId) {
+            removeClaudeSessionId(projectId);
+          }
+          if (resumeVerifyTimer) {
+            clearTimeout(resumeVerifyTimer);
+            resumeVerifyTimer = null;
+          }
+          session._resumeVerified = true;
+        } else if (session._earlyOutput.length >= 2000) {
           session._resumeVerified = true;
           if (resumeVerifyTimer) {
             clearTimeout(resumeVerifyTimer);
@@ -285,10 +256,11 @@ function createChatServer(httpServer, options = {}) {
     });
 
     term.onExit(({ exitCode }) => {
-      // Handle resume failure on unexpected exit
+      // Clear invalid session ID on resume failure
       if (exitCode !== 0 && session._isResumeAttempt && !session._resumeVerified) {
-        handleResumeFallback();
-        return;
+        if (projectId) {
+          removeClaudeSessionId(projectId);
+        }
       }
 
       session.exitPayload = JSON.stringify({ type: 'exit', code: exitCode });
