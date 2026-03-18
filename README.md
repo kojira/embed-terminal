@@ -2,6 +2,8 @@
 
 Embeddable web terminal server for any directory.
 
+![embed-terminal screenshot](docs/screenshot.jpg)
+
 ## Features
 
 - **xterm.js** — full terminal emulation in the browser
