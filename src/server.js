@@ -1,6 +1,8 @@
 const crypto = require('crypto');
 const express = require('express');
+const fs = require('fs');
 const http = require('http');
+const os = require('os');
 const path = require('path');
 const serverDeps = require('./server-deps');
 const WebSocket = require('ws');
@@ -8,8 +10,64 @@ const WebSocket = require('ws');
 const MAX_BUFFER_LINES = 1000;
 const SESSION_TIMEOUT_MS = 5 * 60 * 1000;
 const DEFAULT_WS_PATH = '/ws';
+const SESSION_STORE_PATH = '/tmp/vkoma-claude-sessions.json';
 const publicDir = path.join(__dirname, '..', 'public');
 const clientFile = path.join(__dirname, 'client.js');
+
+function loadSessionStore() {
+  try {
+    return JSON.parse(fs.readFileSync(SESSION_STORE_PATH, 'utf-8'));
+  } catch {
+    return {};
+  }
+}
+
+function saveSessionStore(store) {
+  fs.writeFileSync(SESSION_STORE_PATH, JSON.stringify(store, null, 2));
+}
+
+function getClaudeSessionId(projectId) {
+  if (!projectId) return null;
+  const store = loadSessionStore();
+  return store[projectId] || null;
+}
+
+function setClaudeSessionId(projectId, claudeSessionId) {
+  if (!projectId) return;
+  const store = loadSessionStore();
+  store[projectId] = claudeSessionId;
+  saveSessionStore(store);
+}
+
+function removeClaudeSessionId(projectId) {
+  if (!projectId) return;
+  const store = loadSessionStore();
+  delete store[projectId];
+  saveSessionStore(store);
+}
+
+function detectClaudeSessionId(pid, projectId) {
+  if (!pid || !projectId) return;
+  const sessionsDir = path.join(os.homedir(), '.claude', 'sessions');
+  const maxAttempts = 20;
+  let attempts = 0;
+
+  const check = () => {
+    attempts++;
+    const sessionFile = path.join(sessionsDir, `${pid}.json`);
+    try {
+      const data = JSON.parse(fs.readFileSync(sessionFile, 'utf-8'));
+      if (data.sessionId) {
+        setClaudeSessionId(projectId, data.sessionId);
+        return;
+      }
+    } catch {}
+    if (attempts < maxAttempts) {
+      setTimeout(check, 500);
+    }
+  };
+  setTimeout(check, 1000);
+}
 
 function commandExists(command) {
   const result = serverDeps.spawnSync('which', [command], { stdio: 'ignore' });
@@ -23,8 +81,8 @@ function getShellCommand(provider) {
 
 function createPty(command, options = {}) {
   const args = [];
-  if (options.resume && command === 'claude') {
-    args.push('--resume');
+  if (options.claudeSessionId && command === 'claude') {
+    args.push('--resume', options.claudeSessionId);
   }
   if (options.appendSystemPrompt && command === 'claude') {
     args.push('--append-system-prompt', options.appendSystemPrompt);
@@ -111,10 +169,13 @@ function createChatServer(httpServer, options = {}) {
       return { error: `Command "${command}" not found. Please install it first.` };
     }
 
+    const projectId = sessionOptions.projectId;
+    const claudeSessionId = projectId ? getClaudeSessionId(projectId) : null;
+
     let term;
     try {
       term = createPty(command, {
-        resume: sessionOptions.resume,
+        claudeSessionId: sessionOptions.claudeSessionId || claudeSessionId,
         appendSystemPrompt: sessionOptions.appendSystemPrompt,
         cwd: options.cwd,
         env: options.env,
@@ -132,13 +193,52 @@ function createChatServer(httpServer, options = {}) {
       ws: null,
       exitPayload: null,
       destroyTimer: null,
+      projectId,
     };
 
     term.on('error', (error) => {
       console.error(`PTY error for "${command}":`, error);
     });
 
+    const resumeErrorPatterns = [
+      'Invalid session',
+      'Session not found',
+      'session expired',
+      'invalid session',
+      'Could not resume',
+    ];
+
     term.onData((data) => {
+      // Detect resume failure and fallback to new session
+      if ((sessionOptions.claudeSessionId || claudeSessionId) && !session._resumeVerified) {
+        const text = typeof data === 'string' ? data : data.toString();
+        if (resumeErrorPatterns.some((pattern) => text.includes(pattern))) {
+          if (projectId) {
+            removeClaudeSessionId(projectId);
+          }
+          try {
+            term.kill();
+          } catch {}
+          // Create a new session without claudeSessionId
+          const result = createSession(sessionId, {
+            appendSystemPrompt: sessionOptions.appendSystemPrompt,
+            projectId,
+          });
+          if (!result.error) {
+            const newSession = result.session;
+            newSession.ws = session.ws;
+            // Send buffered data to ws
+            if (newSession.ws && newSession.ws.readyState === WebSocket.OPEN) {
+              for (const chunk of newSession.buffer) {
+                newSession.ws.send(chunk);
+              }
+            }
+          }
+          return;
+        }
+        session._resumeVerified = true;
+      }
+
       session.buffer.push(data);
       while (session.buffer.length > MAX_BUFFER_LINES) {
         session.buffer.shift();
@@ -157,6 +257,10 @@ function createChatServer(httpServer, options = {}) {
       }
       scheduleDestroy(sessionId);
     });
+
+    if (term.pid && projectId) {
+      detectClaudeSessionId(term.pid, projectId);
+    }
 
     sessions.set(sessionId, session);
     return { session };
@@ -262,11 +366,12 @@ function createChatServer(httpServer, options = {}) {
       sendText(JSON.stringify({ type: 'replay-end' }));
       flushPendingMessages();
     } else {
-      const isExpired = Boolean(sessionId);
       sessionId = crypto.randomUUID();
+      const projectId = url.searchParams.get('projectId') || undefined;
 
       const startSession = (appendSystemPrompt) => {
-        const result = createSession(sessionId, { resume: isExpired, appendSystemPrompt });
+        const resumed = Boolean(projectId && getClaudeSessionId(projectId));
+        const result = createSession(sessionId, { appendSystemPrompt, projectId });
         if (result.error) {
           sendText(`\r\n${result.error}\r\n`);
           ws.close();
@@ -275,7 +380,7 @@ function createChatServer(httpServer, options = {}) {
 
         session = result.session;
         session.ws = ws;
-        sendText(JSON.stringify({ type: 'session', sessionId, resumed: isExpired }));
+        sendText(JSON.stringify({ type: 'session', sessionId, resumed }));
         flushPendingMessages();
       };
 
