@@ -1,14 +1,14 @@
 {
-  "name": "cli-chat-terminal",
+  "name": "embed-terminal",
   "version": "0.1.0",
-  "description": "Browser-based terminal UI for Claude and Codex CLI — no API keys needed",
+  "description": "Embeddable web terminal — serve any directory's terminal in your browser",
   "main": "src/server.js",
   "exports": {
     ".": "./src/server.js",
     "./client": "./src/client.js"
   },
   "bin": {
-    "cli-chat-terminal": "bin/cli-chat-terminal.js"
+    "embed-terminal": "bin/cli-chat-terminal.js"
   },
   "keywords": [
     "cli",
