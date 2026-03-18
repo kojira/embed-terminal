@@ -206,37 +206,72 @@ function createChatServer(httpServer, options = {}) {
       'session expired',
       'invalid session',
       'Could not resume',
+      'No conversation found',
     ];
+
+    const usedClaudeSessionId = sessionOptions.claudeSessionId || claudeSessionId;
+    session._isResumeAttempt = Boolean(usedClaudeSessionId);
+    session._resumeVerified = false;
+    session._earlyOutput = '';
+
+    // Set a timeout to mark resume as verified if no error is detected
+    let resumeVerifyTimer = null;
+    if (session._isResumeAttempt) {
+      resumeVerifyTimer = setTimeout(() => {
+        session._resumeVerified = true;
+      }, 3000);
+    }
+
+    function handleResumeFallback() {
+      if (resumeVerifyTimer) {
+        clearTimeout(resumeVerifyTimer);
+        resumeVerifyTimer = null;
+      }
+      if (projectId) {
+        removeClaudeSessionId(projectId);
+      }
+      try {
+        term.kill();
+      } catch {}
+      // Notify the client
+      const notice = '\r\n⚠️ セッション復帰に失敗しました。新規セッションを開始します...\r\n';
+      if (session.ws && session.ws.readyState === WebSocket.OPEN) {
+        session.ws.send(notice);
+      }
+      // Create a new session without claudeSessionId
+      const result = createSession(sessionId, {
+        appendSystemPrompt: sessionOptions.appendSystemPrompt,
+        projectId,
+      });
+      if (!result.error) {
+        const newSession = result.session;
+        newSession.ws = session.ws;
+        sessions.set(sessionId, newSession);
+        // Send buffered data to ws
+        if (newSession.ws && newSession.ws.readyState === WebSocket.OPEN) {
+          for (const chunk of newSession.buffer) {
+            newSession.ws.send(chunk);
+          }
+        }
+      }
+    }
 
     term.onData((data) => {
       // Detect resume failure and fallback to new session
-      if ((sessionOptions.claudeSessionId || claudeSessionId) && !session._resumeVerified) {
+      if (session._isResumeAttempt && !session._resumeVerified) {
         const text = typeof data === 'string' ? data : data.toString();
-        if (resumeErrorPatterns.some((pattern) => text.includes(pattern))) {
-          if (projectId) {
-            removeClaudeSessionId(projectId);
-          }
-          try {
-            term.kill();
-          } catch {}
-          // Create a new session without claudeSessionId
-          const result = createSession(sessionId, {
-            appendSystemPrompt: sessionOptions.appendSystemPrompt,
-            projectId,
-          });
-          if (!result.error) {
-            const newSession = result.session;
-            newSession.ws = session.ws;
-            // Send buffered data to ws
-            if (newSession.ws && newSession.ws.readyState === WebSocket.OPEN) {
-              for (const chunk of newSession.buffer) {
-                newSession.ws.send(chunk);
-              }
-            }
-          }
+        session._earlyOutput += text;
+        if (resumeErrorPatterns.some((pattern) => session._earlyOutput.includes(pattern))) {
+          handleResumeFallback();
           return;
         }
-        session._resumeVerified = true;
+        if (session._earlyOutput.length >= 2000) {
+          session._resumeVerified = true;
+          if (resumeVerifyTimer) {
+            clearTimeout(resumeVerifyTimer);
+            resumeVerifyTimer = null;
+          }
+        }
       }
 
       session.buffer.push(data);
@@ -250,6 +285,12 @@ function createChatServer(httpServer, options = {}) {
     });
 
     term.onExit(({ exitCode }) => {
+      // Handle resume failure on unexpected exit
+      if (exitCode !== 0 && session._isResumeAttempt && !session._resumeVerified) {
+        handleResumeFallback();
+        return;
+      }
+
       session.exitPayload = JSON.stringify({ type: 'exit', code: exitCode });
       if (session.ws && session.ws.readyState === WebSocket.OPEN) {
         session.ws.send(session.exitPayload);
