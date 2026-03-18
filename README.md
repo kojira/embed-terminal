@@ -1,100 +1,101 @@
-# cli-chat-terminal
+# embed-terminal
 
-Browser-based terminal UI for Claude and Codex CLI with no API keys required.
+Embeddable web terminal server for any directory.
 
 ## Features
 
-- Standalone CLI server with browser terminal UI
-- Embeddable WebSocket/PTTY server for existing Node HTTP apps
-- Embeddable browser `ChatTerminal` class with no build step required
-- Supports `claude` and `codex`
-- Session persistence across reconnects
-- Mobile friendly
+- **xterm.js** — full terminal emulation in the browser
+- **node-pty** — real PTY backend via WebSocket
+- **Session management** — automatic reconnection with output replay
+- **IME support** — works with CJK input methods
+- **Mobile friendly** — responsive terminal UI
+- **Theme presets** — dark, light, monokai, dracula (or custom)
 
 ## Quick Start
 
 ```bash
-npx cli-chat-terminal
+npx embed-terminal --cwd /path/to/project
 ```
 
-Then open `http://0.0.0.0:3456` in your browser.
+Opens a browser terminal at `http://0.0.0.0:3456` with the working directory set to `/path/to/project`.
 
-## Library Usage
+## CLI Options
 
-### Server Integration
+| Option | Default | Description |
+|---|---|---|
+| `--cwd <path>` | `process.cwd()` | Working directory for the terminal |
+| `--port <number>` | `3456` | Server port |
+| `--host <address>` | `0.0.0.0` | Server host |
+| `--provider <name>` | `claude` | CLI provider (`claude` or `codex`) |
+
+```bash
+npx embed-terminal --cwd ~/projects/myapp --port 8080 --provider codex
+```
+
+## Library Usage (Server)
 
 ```js
-const express = require('express');
 const http = require('http');
-const { createChatServer } = require('cli-chat-terminal');
+const { createChatServer } = require('embed-terminal');
 
-const app = express();
-const server = http.createServer(app);
+const server = http.createServer();
 
 const chat = createChatServer(server, {
+  cwd: '/path/to/project',
   provider: 'claude',
   path: '/ws',
 });
 
 server.listen(3000);
 
-// Later:
+// Cleanup:
 // await chat.close();
 ```
 
-`createChatServer(server, options)` attaches the chat WebSocket server to an existing `http.Server` and returns:
+`createChatServer(server, options)` returns `{ wss, sessions, close }`.
 
-- `wss`
-- `sessions`
-- `close()`
-
-### Client Embedding
+## Library Usage (Client)
 
 ```html
 <div id="terminal"></div>
-<script src="/node_modules/cli-chat-terminal/src/client.js"></script>
+<script src="/node_modules/embed-terminal/src/client.js"></script>
 <script>
-  const term = new window.ChatTerminal(document.getElementById('terminal'), {
+  const term = new ChatTerminal(document.getElementById('terminal'), {
     wsUrl: 'ws://localhost:3000/ws',
-    fontSize: 14
+    fontSize: 14,
+    theme: 'dark',
   });
 
   term.onExit = function (event) {
-    console.log('CLI exited with code', event.code);
+    console.log('exited with code', event.code);
   };
 </script>
 ```
 
-If your app serves the packaged client through the `./client` export path, it will expose `window.ChatTerminal` when loaded in the browser.
+### Client Options
 
-## Standalone CLI
+| Option | Default | Description |
+|---|---|---|
+| `wsUrl` | auto-detected | WebSocket URL |
+| `fontSize` | `14` | Terminal font size |
+| `fontFamily` | `"JetBrains Mono", monospace` | Terminal font |
+| `theme` | `'default'` | Theme name or custom object |
 
-The CLI still starts the full standalone server and uses the same server/client library pieces internally.
+### Client Methods
 
-## Options
-
-- `--provider` (`claude` or `codex`, default: `claude`)
-- `--port` (default: `3456`)
-- `--host` (default: `0.0.0.0`)
-
-## Example
-
-```bash
-npx cli-chat-terminal --provider codex --port 8080
-```
+- `connect()` — connect to the server
+- `dispose()` — close connection and clean up
+- `fit()` — resize terminal to fit container
+- `resize(cols, rows)` — set explicit terminal size
+- `sendInput(text)` — send text to the PTY
+- `setFontSize(size)` — change font size
+- `setTheme(theme)` — change theme (name or object)
+- `setInputTransformer(fn)` — transform input before sending
 
 ## Requirements
 
 - Node.js 18+
 - `claude` or `codex` CLI installed and available in `PATH`
-
-## How It Works
-
-The package can either:
-
-- start its own standalone Express and WebSocket server via the CLI
-- attach chat PTY sessions to an existing `http.Server`
-- embed the browser terminal into any page through `ChatTerminal`
 
 ## License
 

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+const path = require('path');
 const { startServer } = require('../src/server');
 
 function parseArgs(argv) {
@@ -7,6 +8,7 @@ function parseArgs(argv) {
     provider: 'claude',
     port: 3456,
     host: '0.0.0.0',
+    cwd: process.cwd(),
   };
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -49,8 +51,19 @@ function parseArgs(argv) {
       continue;
     }
 
+    if (arg === '--cwd' && next) {
+      config.cwd = next;
+      i += 1;
+      continue;
+    }
+
     if (arg.startsWith('--host=')) {
       config.host = arg.slice('--host='.length);
+      continue;
+    }
+
+    if (arg.startsWith('--cwd=')) {
+      config.cwd = arg.slice('--cwd='.length);
       continue;
     }
   }
@@ -60,6 +73,7 @@ function parseArgs(argv) {
     throw new Error(`Invalid --provider value: ${config.provider}`);
   }
   config.provider = normalizedProvider;
+  config.cwd = path.resolve(config.cwd);
 
   return config;
 }
