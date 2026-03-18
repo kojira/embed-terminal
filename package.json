@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "description": "Embeddable web terminal — serve any directory's terminal in your browser",
   "main": "src/server.js",
+  "types": "src/index.d.ts",
   "exports": {
     ".": "./src/server.js",
     "./client": "./src/client.js"

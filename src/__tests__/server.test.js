@@ -329,4 +329,83 @@ describe('createChatServer', () => {
     await terminateClient(client);
   }, 15000);
 
+  it('calls getCommandAndArgs and uses the returned command', async () => {
+    const getCommandAndArgs = vi.fn().mockResolvedValue({ command: 'bash', args: ['-l'] });
+    chat = createChatServer(server, { getCommandAndArgs });
+    const address = await listen(server);
+    const { client, messages } = await openClientWithCollector(address);
+
+    await vi.waitFor(() => {
+      expect(messages.length).toBeGreaterThanOrEqual(1);
+    });
+
+    expect(getCommandAndArgs).toHaveBeenCalledTimes(1);
+    expect(spawnPtyMock).toHaveBeenCalledWith(
+      'bash',
+      ['-l'],
+      expect.objectContaining({}),
+    );
+
+    await terminateClient(client);
+  }, 15000);
+
+  it('uses default command ($SHELL or bash) when getCommandAndArgs is not provided', async () => {
+    chat = createChatServer(server);
+    const address = await listen(server);
+    const { client, messages } = await openClientWithCollector(address);
+
+    await vi.waitFor(() => {
+      expect(messages.length).toBeGreaterThanOrEqual(1);
+    });
+
+    const expectedCommand = process.env.SHELL || 'bash';
+    expect(spawnPtyMock).toHaveBeenCalledWith(
+      expectedCommand,
+      [],
+      expect.objectContaining({}),
+    );
+
+    await terminateClient(client);
+  }, 15000);
+
+  it('calls onSessionCreated with { pid, searchParams } after PTY is spawned', async () => {
+    const fakePtyWithPid = Object.assign(createFakePty(), { pid: 12345 });
+    spawnPtyMock.mockImplementationOnce(() => fakePtyWithPid);
+    const onSessionCreated = vi.fn();
+    chat = createChatServer(server, { onSessionCreated });
+    const address = await listen(server);
+    const { client, messages } = await openClientWithCollector(address, '?foo=bar');
+
+    await vi.waitFor(() => {
+      expect(messages.length).toBeGreaterThanOrEqual(1);
+    });
+
+    expect(onSessionCreated).toHaveBeenCalledTimes(1);
+    const callArg = onSessionCreated.mock.calls[0][0];
+    expect(callArg.pid).toBe(12345);
+    expect(callArg.searchParams).toBeInstanceOf(URLSearchParams);
+    expect(callArg.searchParams.get('foo')).toBe('bar');
+
+    await terminateClient(client);
+  }, 15000);
+
+  it('passes custom args from getCommandAndArgs to PTY', async () => {
+    const getCommandAndArgs = vi.fn().mockResolvedValue({ command: 'bash', args: ['--norc', '--noprofile'] });
+    chat = createChatServer(server, { getCommandAndArgs });
+    const address = await listen(server);
+    const { client, messages } = await openClientWithCollector(address);
+
+    await vi.waitFor(() => {
+      expect(messages.length).toBeGreaterThanOrEqual(1);
+    });
+
+    expect(spawnPtyMock).toHaveBeenCalledWith(
+      'bash',
+      ['--norc', '--noprofile'],
+      expect.objectContaining({}),
+    );
+
+    await terminateClient(client);
+  }, 15000);
+
 });
