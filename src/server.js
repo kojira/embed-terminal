@@ -173,6 +173,67 @@ function createChatServer(httpServer, options = {}) {
       }
     }
 
+    // Buffer incoming messages until the session/PTY is ready.
+    const pendingMessages = [];
+    let sessionReady = false;
+
+    function flushPendingMessages() {
+      sessionReady = true;
+      for (const msg of pendingMessages) {
+        handleMessage(msg);
+      }
+      pendingMessages.length = 0;
+    }
+
+    function handleMessage(message) {
+      const input = message.toString();
+
+      try {
+        const parsed = JSON.parse(input);
+        if (parsed && parsed.type === 'resize') {
+          const cols = Number(parsed.cols);
+          const rows = Number(parsed.rows);
+          if (Number.isFinite(cols) && Number.isFinite(rows) && cols > 0 && rows > 0) {
+            session.term.resize(cols, rows);
+          }
+          return;
+        }
+      } catch (_error) {
+        // Plain text terminal input.
+      }
+
+      if (session.term) {
+        session.term.write(input);
+      }
+    }
+
+    // Register WebSocket handlers immediately so they work even during async setup.
+    ws.on('message', (message) => {
+      if (!sessionReady) {
+        pendingMessages.push(message);
+        return;
+      }
+      handleMessage(message);
+    });
+
+    ws.on('close', () => {
+      if (session) {
+        session.ws = null;
+        if (!session.exitPayload) {
+          scheduleDestroy(sessionId);
+        }
+      }
+    });
+
+    ws.on('error', () => {
+      if (session) {
+        session.ws = null;
+        if (!session.exitPayload) {
+          scheduleDestroy(sessionId);
+        }
+      }
+    });
+
     if (sessionId && sessions.has(sessionId)) {
       session = sessions.get(sessionId);
       cancelDestroy(sessionId);
@@ -199,6 +260,7 @@ function createChatServer(httpServer, options = {}) {
         sendText(chunk);
       }
       sendText(JSON.stringify({ type: 'replay-end' }));
+      flushPendingMessages();
     } else {
       const isExpired = Boolean(sessionId);
       sessionId = crypto.randomUUID();
@@ -214,6 +276,7 @@ function createChatServer(httpServer, options = {}) {
         session = result.session;
         session.ws = ws;
         sendText(JSON.stringify({ type: 'session', sessionId, resumed: isExpired }));
+        flushPendingMessages();
       };
 
       if (options.getSystemPrompt) {
@@ -228,42 +291,6 @@ function createChatServer(httpServer, options = {}) {
 
       startSession(undefined);
     }
-
-    ws.on('message', (message) => {
-      const input = message.toString();
-
-      try {
-        const parsed = JSON.parse(input);
-        if (parsed && parsed.type === 'resize') {
-          const cols = Number(parsed.cols);
-          const rows = Number(parsed.rows);
-          if (Number.isFinite(cols) && Number.isFinite(rows) && cols > 0 && rows > 0) {
-            session.term.resize(cols, rows);
-          }
-          return;
-        }
-      } catch (_error) {
-        // Plain text terminal input.
-      }
-
-      if (session.term) {
-        session.term.write(input);
-      }
-    });
-
-    ws.on('close', () => {
-      session.ws = null;
-      if (!session.exitPayload) {
-        scheduleDestroy(sessionId);
-      }
-    });
-
-    ws.on('error', () => {
-      session.ws = null;
-      if (!session.exitPayload) {
-        scheduleDestroy(sessionId);
-      }
-    });
   });
 
   function close(callback) {
