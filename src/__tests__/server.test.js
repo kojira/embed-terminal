@@ -1,5 +1,8 @@
+import fs from 'node:fs';
 import http from 'node:http';
 import { createRequire } from 'node:module';
+import os from 'node:os';
+import path from 'node:path';
 import WebSocket from 'ws';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -380,4 +383,129 @@ describe('createChatServer', () => {
 
     await terminateClient(client);
   }, 15000);
+
+  describe('detectClaudeSessionId', () => {
+    const sessionsDir = path.join(os.homedir(), '.claude', 'sessions');
+    let readdirSyncSpy;
+    let readFileSyncSpy;
+    let writeFileSyncSpy;
+    let originalReadFileSync;
+    let originalReaddirSync;
+
+    beforeEach(() => {
+      originalReadFileSync = fs.readFileSync;
+      originalReaddirSync = fs.readdirSync;
+    });
+
+    afterEach(() => {
+      if (readdirSyncSpy) readdirSyncSpy.mockRestore();
+      if (readFileSyncSpy) readFileSyncSpy.mockRestore();
+      if (writeFileSyncSpy) writeFileSyncSpy.mockRestore();
+    });
+
+    it('detects session ID via PID file (fast path)', async () => {
+      const fakePid = 99999;
+      const fakePty = createFakePty();
+      fakePty.pid = fakePid;
+      spawnPtyMock.mockImplementation(() => fakePty);
+
+      // Before PTY creation: empty sessions dir
+      // After PTY creation: PID file appears
+      let callCount = 0;
+      readdirSyncSpy = vi.spyOn(fs, 'readdirSync').mockImplementation((dir) => {
+        if (dir === sessionsDir) {
+          callCount++;
+          // First call is the pre-snapshot, return empty
+          if (callCount === 1) return [];
+          return [`${fakePid}.json`];
+        }
+        return originalReaddirSync.call(fs, dir);
+      });
+
+      readFileSyncSpy = vi.spyOn(fs, 'readFileSync').mockImplementation((filePath, ...args) => {
+        if (filePath === path.join(sessionsDir, `${fakePid}.json`)) {
+          return JSON.stringify({ sessionId: 'test-session-abc', cwd: '/tmp' });
+        }
+        return originalReadFileSync.call(fs, filePath, ...args);
+      });
+
+      writeFileSyncSpy = vi.spyOn(fs, 'writeFileSync').mockImplementation(() => {});
+
+      chat = createChatServer(server);
+      const address = await listen(server);
+      const client = await openClient(address, '?projectId=test-project');
+      await waitForMessage(client);
+
+      // Wait for the detection polling (1s initial delay + 500ms poll)
+      await vi.waitFor(
+        () => {
+          expect(writeFileSyncSpy).toHaveBeenCalled();
+          const lastCall = writeFileSyncSpy.mock.calls[writeFileSyncSpy.mock.calls.length - 1];
+          const stored = JSON.parse(lastCall[1]);
+          expect(stored['test-project']).toBe('test-session-abc');
+        },
+        { timeout: 5000 }
+      );
+
+      await terminateClient(client);
+    }, 15000);
+
+    it('detects session ID via directory diff when PID file does not exist', async () => {
+      const fakePid = 88888;
+      const fakePty = createFakePty();
+      fakePty.pid = fakePid;
+      spawnPtyMock.mockImplementation(() => fakePty);
+
+      const projectCwd = '/test/project/dir';
+      // The new file uses a different PID (child process PID)
+      const childPidFile = '77777.json';
+
+      let readdirCallCount = 0;
+      readdirSyncSpy = vi.spyOn(fs, 'readdirSync').mockImplementation((dir) => {
+        if (dir === sessionsDir) {
+          readdirCallCount++;
+          // First call: pre-snapshot (before PTY), existing files
+          if (readdirCallCount === 1) return ['old-session.json'];
+          // Subsequent calls: new file appeared with different PID
+          return ['old-session.json', childPidFile];
+        }
+        return originalReaddirSync.call(fs, dir);
+      });
+
+      readFileSyncSpy = vi.spyOn(fs, 'readFileSync').mockImplementation((filePath, ...args) => {
+        // PID file does NOT exist
+        if (filePath === path.join(sessionsDir, `${fakePid}.json`)) {
+          throw new Error('ENOENT');
+        }
+        // The new file with matching cwd
+        if (filePath === path.join(sessionsDir, childPidFile)) {
+          return JSON.stringify({
+            sessionId: 'detected-via-diff',
+            cwd: projectCwd,
+            startedAt: new Date().toISOString(),
+          });
+        }
+        return originalReadFileSync.call(fs, filePath, ...args);
+      });
+
+      writeFileSyncSpy = vi.spyOn(fs, 'writeFileSync').mockImplementation(() => {});
+
+      chat = createChatServer(server, { cwd: projectCwd });
+      const address = await listen(server);
+      const client = await openClient(address, '?projectId=test-project-diff');
+      await waitForMessage(client);
+
+      await vi.waitFor(
+        () => {
+          expect(writeFileSyncSpy).toHaveBeenCalled();
+          const lastCall = writeFileSyncSpy.mock.calls[writeFileSyncSpy.mock.calls.length - 1];
+          const stored = JSON.parse(lastCall[1]);
+          expect(stored['test-project-diff']).toBe('detected-via-diff');
+        },
+        { timeout: 5000 }
+      );
+
+      await terminateClient(client);
+    }, 15000);
+  });
 });

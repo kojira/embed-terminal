@@ -46,7 +46,7 @@ function removeClaudeSessionId(projectId) {
   saveSessionStore(store);
 }
 
-function detectClaudeSessionId(pid, projectId) {
+function detectClaudeSessionId(pid, projectId, preExistingFiles, cwd) {
   if (!pid || !projectId) return;
   const sessionsDir = path.join(os.homedir(), '.claude', 'sessions');
   const maxAttempts = 20;
@@ -54,6 +54,8 @@ function detectClaudeSessionId(pid, projectId) {
 
   const check = () => {
     attempts++;
+
+    // Fast path: check PID-based file first
     const sessionFile = path.join(sessionsDir, `${pid}.json`);
     try {
       const data = JSON.parse(fs.readFileSync(sessionFile, 'utf-8'));
@@ -62,6 +64,42 @@ function detectClaudeSessionId(pid, projectId) {
         return;
       }
     } catch {}
+
+    // Fallback: directory diff approach
+    if (preExistingFiles) {
+      try {
+        const currentFiles = fs.readdirSync(sessionsDir);
+        const newFiles = currentFiles.filter((f) => !preExistingFiles.has(f) && f.endsWith('.json'));
+
+        let bestMatch = null;
+        let bestStartedAt = null;
+
+        for (const file of newFiles) {
+          try {
+            const data = JSON.parse(fs.readFileSync(path.join(sessionsDir, file), 'utf-8'));
+            if (!data.sessionId) continue;
+
+            // Prefer matching cwd
+            if (cwd && data.cwd === cwd) {
+              setClaudeSessionId(projectId, data.sessionId);
+              return;
+            }
+
+            // Track most recent startedAt as fallback
+            if (data.startedAt && (!bestStartedAt || data.startedAt > bestStartedAt)) {
+              bestStartedAt = data.startedAt;
+              bestMatch = data.sessionId;
+            }
+          } catch {}
+        }
+
+        if (bestMatch) {
+          setClaudeSessionId(projectId, bestMatch);
+          return;
+        }
+      } catch {}
+    }
+
     if (attempts < maxAttempts) {
       setTimeout(check, 500);
     }
@@ -172,6 +210,15 @@ function createChatServer(httpServer, options = {}) {
     const projectId = sessionOptions.projectId;
     const claudeSessionId = projectId ? getClaudeSessionId(projectId) : null;
 
+    // Snapshot existing session files before PTY spawn for directory-diff detection
+    const sessionsDir = path.join(os.homedir(), '.claude', 'sessions');
+    let preExistingFiles;
+    try {
+      preExistingFiles = new Set(fs.readdirSync(sessionsDir));
+    } catch {
+      preExistingFiles = new Set();
+    }
+
     let term;
     try {
       term = createPty(command, {
@@ -272,7 +319,7 @@ function createChatServer(httpServer, options = {}) {
     });
 
     if (term.pid && projectId) {
-      detectClaudeSessionId(term.pid, projectId);
+      detectClaudeSessionId(term.pid, projectId, preExistingFiles, options.cwd);
     }
 
     sessions.set(sessionId, session);
