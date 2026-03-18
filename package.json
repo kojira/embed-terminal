@@ -1,6 +1,6 @@
 {
   "name": "embed-terminal",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Embeddable web terminal — serve any directory's terminal in your browser",
   "main": "src/server.js",
   "types": "src/index.d.ts",

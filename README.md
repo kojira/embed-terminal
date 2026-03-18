@@ -6,11 +6,11 @@ Embeddable web terminal server for any directory.
 
 ### PC
 
-![PC version](docs/screenshot-pc.png)
+![PC version](https://raw.githubusercontent.com/kojira/embed-terminal/main/docs/screenshot-pc.png)
 
 ### Mobile
 
-![Mobile version](docs/screenshot-mobile.png)
+![Mobile version](https://raw.githubusercontent.com/kojira/embed-terminal/main/docs/screenshot-mobile.png)
 
 ## Features
 
@@ -18,7 +18,7 @@ Embeddable web terminal server for any directory.
 - **node-pty** — real PTY backend via WebSocket
 - **Session management** — automatic reconnection with output replay
 - **IME support** — works with CJK input methods
-- **Mobile support** — 画面幅768px以下でコントロールバーが自動表示。Ctrl/Shift/Tab/Esc/Enter/矢印キー等のボタンが使える。ダブルタップでロック固定可能
+- **Mobile support** — Control bar auto-appears on screens ≤768px wide. Buttons for Ctrl/Shift/Tab/Esc/Enter/Arrow keys and more. Double-tap Ctrl/Shift to lock.
 - **Theme presets** — dark, light, monokai, dracula (or custom)
 
 ## Quick Start
@@ -125,7 +125,7 @@ On screens narrower than 768px, a control bar is automatically displayed at the 
 
 **Lock mode:** Double-tap a modifier button (Ctrl, Shift) to lock it on. Tap again to unlock.
 
-![Mobile control bar](docs/screenshot-mobile.png)
+![Mobile control bar](https://raw.githubusercontent.com/kojira/embed-terminal/main/docs/screenshot-mobile.png)
 
 ## Requirements
 
