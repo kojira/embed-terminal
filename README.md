@@ -18,16 +18,17 @@ Embeddable web terminal server for any directory.
 - **node-pty** — real PTY backend via WebSocket
 - **Session management** — automatic reconnection with output replay
 - **IME support** — works with CJK input methods
-- **Mobile friendly** — responsive terminal UI
+- **Mobile support** — 画面幅768px以下でコントロールバーが自動表示。Ctrl/Shift/Tab/Esc/Enter/矢印キー等のボタンが使える。ダブルタップでロック固定可能
 - **Theme presets** — dark, light, monokai, dracula (or custom)
 
 ## Quick Start
 
 ```bash
-npx embed-terminal --cwd /path/to/project
+npx embed-terminal
+npx embed-terminal --cwd /path/to/project --port 8080
 ```
 
-Opens a browser terminal at `http://0.0.0.0:3456` with the working directory set to `/path/to/project`.
+By default, your login shell (`$SHELL`, e.g. bash or zsh) is launched. Opens a browser terminal at `http://0.0.0.0:3456`.
 
 ## CLI Options
 
@@ -36,10 +37,9 @@ Opens a browser terminal at `http://0.0.0.0:3456` with the working directory set
 | `--cwd <path>` | `process.cwd()` | Working directory for the terminal |
 | `--port <number>` | `3456` | Server port |
 | `--host <address>` | `0.0.0.0` | Server host |
-| `--provider <name>` | `claude` | CLI provider (`claude` or `codex`) |
 
 ```bash
-npx embed-terminal --cwd ~/projects/myapp --port 8080 --provider codex
+npx embed-terminal --cwd ~/projects/myapp --port 8080
 ```
 
 ## Library Usage (Server)
@@ -52,8 +52,14 @@ const server = http.createServer();
 
 const chat = createChatServer(server, {
   cwd: '/path/to/project',
-  provider: 'claude',
   path: '/ws',
+  getCommandAndArgs: (searchParams) => ({
+    command: 'claude',
+    args: [],
+  }),
+  onSessionCreated: ({ pid, searchParams }) => {
+    console.log(`PTY started: pid=${pid}`);
+  },
 });
 
 server.listen(3000);
@@ -63,6 +69,15 @@ server.listen(3000);
 ```
 
 `createChatServer(server, options)` returns `{ wss, sessions, close }`.
+
+### Server Options
+
+| Option | Description |
+|---|---|
+| `cwd` | Working directory for the terminal |
+| `path` | WebSocket endpoint path |
+| `getCommandAndArgs(searchParams)` | Callback that receives URL query parameters (`URLSearchParams`) and returns `{ command, args }`. If omitted, `$SHELL` is launched |
+| `onSessionCreated({ pid, searchParams })` | Callback invoked after the PTY process starts. Receives the process ID and URL query parameters |
 
 ## Library Usage (Client)
 
@@ -102,10 +117,19 @@ server.listen(3000);
 - `setTheme(theme)` — change theme (name or object)
 - `setInputTransformer(fn)` — transform input before sending
 
+## Mobile Support
+
+On screens narrower than 768px, a control bar is automatically displayed at the bottom of the terminal.
+
+**Available buttons:** Ctrl, Shift, Tab, Esc, Enter, ↑↓←→ (arrow keys)
+
+**Lock mode:** Double-tap a modifier button (Ctrl, Shift) to lock it on. Tap again to unlock.
+
+![Mobile control bar](docs/screenshot-mobile.png)
+
 ## Requirements
 
 - Node.js 18+
-- `claude` or `codex` CLI installed and available in `PATH`
 
 ## License
 
